@@ -1,0 +1,16 @@
+# Dataset configuration
+data:
+  data_dir: ${oc.env:DATA_DIR,data}
+  image_size: [256, 256]  # [height, width]
+  defect_classes:
+    - dent
+    - nick
+    - scratch
+    - corrosion
+
+# DataLoader configuration
+dataloader:
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+

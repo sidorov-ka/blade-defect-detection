@@ -1,0 +1,10 @@
+defaults:
+  - data: dataset
+  - model: model
+  - training: training
+  - mlflow: mlflow
+
+# Main config
+project_name: blade_defect_detection
+seed: 42
+

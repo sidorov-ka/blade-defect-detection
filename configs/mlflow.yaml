@@ -1,0 +1,6 @@
+# MLflow configuration
+mlflow:
+  tracking_uri: http://127.0.0.1:8080
+  experiment_name: blade_defect_detection
+  run_name: null  # Will be auto-generated if null
+

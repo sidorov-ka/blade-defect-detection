@@ -1,0 +1,5 @@
+# Model configuration
+model:
+  in_channels: 3  # RGB
+  num_classes: 5  # background + 4 defects
+
