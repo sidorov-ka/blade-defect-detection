@@ -72,6 +72,11 @@ Thumbs.db
 # Logs
 *.log
 logs/
+training*.log
+
+# PID files
+*.pid
+training*.pid
 
 # Environment variables
 .env
