@@ -229,6 +229,7 @@ def train_model(
     loggers.append(tensorboard_logger)
     
     # MLflow logger (optional - only if server is available)
+    mlflow_logger = None
     try:
         mlflow_logger = MLFlowLogger(
             experiment_name=experiment_name,
@@ -265,12 +266,16 @@ def train_model(
     # Train
     trainer.fit(model, train_loader, val_loader)
 
-    # Log additional metrics to MLflow
-    log_metrics_to_mlflow(
-        mlflow_logger.experiment,
-        mlflow_logger.run_id,
-        trainer.callback_metrics,
-    )
+    # Log additional metrics to MLflow (if available)
+    if mlflow_logger is not None:
+        try:
+            log_metrics_to_mlflow(
+                mlflow_logger.experiment,
+                mlflow_logger.run_id,
+                trainer.callback_metrics,
+            )
+        except Exception as e:
+            print(f"Failed to log metrics to MLflow: {e}")
 
     return trainer, model
 
