@@ -202,14 +202,16 @@ def train_model(
         filename="best-{epoch:02d}-{val_loss:.2f}",
     )
 
-    # Trainer
+    # Trainer with GPU support
     trainer = Trainer(
         max_epochs=num_epochs,
         logger=mlflow_logger,
         callbacks=[checkpoint_callback],
-        accelerator="auto",
-        devices="auto",
+        accelerator="gpu",  # Explicitly use GPU
+        devices=1,  # Use single GPU
+        precision="16-mixed",  # Mixed precision for faster training and less memory
         log_every_n_steps=10,
+        enable_progress_bar=True,
     )
 
     # Train

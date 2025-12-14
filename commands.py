@@ -31,10 +31,10 @@ def train(
 
     # Override data_dir if provided
     if data_dir:
-        cfg.data.data_dir = data_dir
+        cfg.data.data.data_dir = data_dir
 
     # Convert to absolute path
-    data_dir = Path(cfg.data.data_dir).resolve()
+    data_dir = Path(cfg.data.data.data_dir).resolve()
 
     # Print config
     print("Configuration:")
@@ -43,15 +43,15 @@ def train(
     # Train
     train_model(
         data_dir=data_dir,
-        image_size=tuple(cfg.data.image_size),
-        defect_classes=list(cfg.data.defect_classes),
-        batch_size=cfg.dataloader.batch_size,
-        num_epochs=cfg.training.num_epochs,
-        learning_rate=cfg.training.learning_rate,
-        num_workers=cfg.dataloader.num_workers,
-        mlflow_tracking_uri=cfg.mlflow.tracking_uri,
-        experiment_name=cfg.mlflow.experiment_name,
-        run_name=cfg.mlflow.run_name,
+        image_size=tuple(cfg.data.data.image_size),
+        defect_classes=list(cfg.data.data.defect_classes),
+        batch_size=cfg.data.dataloader.batch_size,
+        num_epochs=cfg.training.training.num_epochs,
+        learning_rate=cfg.training.training.learning_rate,
+        num_workers=cfg.data.dataloader.num_workers,
+        mlflow_tracking_uri=cfg.mlflow.mlflow.tracking_uri,
+        experiment_name=cfg.mlflow.mlflow.experiment_name,
+        run_name=cfg.mlflow.mlflow.run_name,
     )
 
 
