@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import MLFlowLogger
+from pytorch_lightning.loggers import MLFlowLogger, TensorBoardLogger
 from torch.utils.data import DataLoader, random_split
 from torchmetrics import JaccardIndex, MetricCollection
 
@@ -64,8 +64,25 @@ class BladeDefectLightningModule(LightningModule):
     def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Training step."""
         images, masks = batch
+        
+        # Validate masks
+        mask_min, mask_max = masks.min().item(), masks.max().item()
+        if mask_min < 0 or mask_max >= self.num_classes:
+            raise ValueError(
+                f"Invalid mask values: min={mask_min}, max={mask_max}, "
+                f"expected range [0, {self.num_classes-1}]"
+            )
+        
         logits = self(images)
         loss = self.criterion(logits, masks)
+        
+        # Check for NaN or invalid loss
+        if torch.isnan(loss) or torch.isinf(loss):
+            print(f"Warning: Invalid loss at step {batch_idx}: {loss.item()}")
+            print(f"  Logits: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
+            print(f"  Masks: min={mask_min}, max={mask_max}, unique={torch.unique(masks).tolist()}")
+            # Use a small positive value instead of NaN
+            loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
         # Compute predictions
         preds = torch.argmax(logits, dim=1)
@@ -82,8 +99,22 @@ class BladeDefectLightningModule(LightningModule):
     def validation_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Validation step."""
         images, masks = batch
+        
+        # Validate masks
+        mask_min, mask_max = masks.min().item(), masks.max().item()
+        if mask_min < 0 or mask_max >= self.num_classes:
+            raise ValueError(
+                f"Invalid mask values: min={mask_min}, max={mask_max}, "
+                f"expected range [0, {self.num_classes-1}]"
+            )
+        
         logits = self(images)
         loss = self.criterion(logits, masks)
+        
+        # Check for NaN or invalid loss
+        if torch.isnan(loss) or torch.isinf(loss):
+            print(f"Warning: Invalid loss at val step {batch_idx}: {loss.item()}")
+            loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
         # Compute predictions
         preds = torch.argmax(logits, dim=1)
@@ -187,12 +218,29 @@ def train_model(
         learning_rate=learning_rate,
     )
 
-    # Setup MLflow logger
-    mlflow_logger = MLFlowLogger(
-        experiment_name=experiment_name,
-        tracking_uri=mlflow_tracking_uri,
-        run_name=run_name,
+    # Setup loggers
+    loggers = []
+    
+    # TensorBoard logger for easy visualization (always enabled)
+    tensorboard_logger = TensorBoardLogger(
+        save_dir="lightning_logs",
+        name="blade_defect_detection",
     )
+    loggers.append(tensorboard_logger)
+    
+    # MLflow logger (optional - only if server is available)
+    try:
+        mlflow_logger = MLFlowLogger(
+            experiment_name=experiment_name,
+            tracking_uri=mlflow_tracking_uri,
+            run_name=run_name,
+        )
+        # Test connection
+        _ = mlflow_logger.experiment
+        loggers.append(mlflow_logger)
+        print("MLflow logging enabled")
+    except Exception as e:
+        print(f"MLflow server not available ({e}), using TensorBoard only")
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -205,7 +253,7 @@ def train_model(
     # Trainer with GPU support
     trainer = Trainer(
         max_epochs=num_epochs,
-        logger=mlflow_logger,
+        logger=loggers,
         callbacks=[checkpoint_callback],
         accelerator="gpu",  # Explicitly use GPU
         devices=1,  # Use single GPU

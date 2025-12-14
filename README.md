@@ -132,7 +132,18 @@ The training process will:
 
 ### Monitoring
 
-View training metrics in MLflow UI:
+**TensorBoard (recommended for real-time visualization):**
+```bash
+tensorboard --logdir lightning_logs --host 127.0.0.1 --port 6006
+```
+
+Then open http://127.0.0.1:6006 in your browser to view:
+- Training/validation loss curves
+- IoU metrics
+- Learning rate
+- Other training metrics
+
+**MLflow UI:**
 ```bash
 mlflow ui --host 127.0.0.1 --port 5000
 ```

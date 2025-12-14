@@ -134,6 +134,14 @@ class BladeDefectDataset(Dataset):
                 mask_array = np.where(mask_array > 127, sample["class_idx"], 0)
             
             mask_array = mask_array.astype(np.int64)
+            
+            # Validate mask values
+            if mask_array.min() < 0 or mask_array.max() >= self.num_classes:
+                raise ValueError(
+                    f"Invalid mask values in {sample['mask_path']}: "
+                    f"min={mask_array.min()}, max={mask_array.max()}, "
+                    f"expected range [0, {self.num_classes-1}]"
+                )
         else:
             # Normal sample: all background (class 0)
             mask_array = np.zeros(self.image_size, dtype=np.int64)
@@ -141,6 +149,10 @@ class BladeDefectDataset(Dataset):
         # Convert to tensors
         image_tensor = transforms.ToTensor()(image)  # [3, H, W] in [0, 1]
         mask_tensor = torch.from_numpy(mask_array).long()  # [H, W] int64
+        
+        # Final validation
+        assert mask_tensor.min() >= 0 and mask_tensor.max() < self.num_classes, \
+            f"Mask validation failed: min={mask_tensor.min()}, max={mask_tensor.max()}, num_classes={self.num_classes}"
 
         # Apply transforms if provided
         if self.transform:
