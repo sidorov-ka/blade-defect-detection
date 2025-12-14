@@ -110,6 +110,7 @@ class BladeDefectLightningModule(LightningModule):
 def train_model(
     data_dir: Path,
     image_size: tuple = (256, 256),
+    defect_classes: Optional[list] = None,
     batch_size: int = 16,
     num_epochs: int = 50,
     learning_rate: float = 1e-4,
@@ -123,6 +124,7 @@ def train_model(
     Args:
         data_dir: Root directory containing images/ and masks/
         image_size: Target image size (height, width)
+        defect_classes: List of defect class names (e.g., ['dent', 'nick', 'scratch', 'corrosion'])
         batch_size: Batch size
         num_epochs: Number of training epochs
         learning_rate: Learning rate
@@ -139,11 +141,17 @@ def train_model(
 
     if train_dir.exists() and val_dir.exists():
         # Use separate train/val directories
-        train_dataset = BladeDefectDataset(train_dir, image_size=image_size)
-        val_dataset = BladeDefectDataset(val_dir, image_size=image_size)
+        train_dataset = BladeDefectDataset(
+            train_dir, image_size=image_size, defect_classes=defect_classes
+        )
+        val_dataset = BladeDefectDataset(
+            val_dir, image_size=image_size, defect_classes=defect_classes
+        )
     else:
         # Create single dataset and split automatically (80/20)
-        full_dataset = BladeDefectDataset(data_dir, image_size=image_size)
+        full_dataset = BladeDefectDataset(
+            data_dir, image_size=image_size, defect_classes=defect_classes
+        )
         train_size = int(0.8 * len(full_dataset))
         val_size = len(full_dataset) - train_size
         train_dataset, val_dataset = random_split(

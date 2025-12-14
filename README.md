@@ -11,7 +11,7 @@ This project implements a deep learning pipeline for detecting and segmenting de
 ### Prerequisites
 
 - Python 3.9+
-- Poetry (or uv) for dependency management
+- Poetry for dependency management
 
 ### Installation
 
@@ -26,16 +26,14 @@ cd blade-defect-detection
 poetry install
 ```
 
-Or using uv:
-```bash
-uv pip install -e .
-```
-
 3. Activate the virtual environment:
 ```bash
 poetry shell
-# or
-source .venv/bin/activate
+```
+
+Or if you prefer to activate manually:
+```bash
+source $(poetry env info --path)/bin/activate
 ```
 
 4. Install pre-commit hooks:

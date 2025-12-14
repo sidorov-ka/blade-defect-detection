@@ -44,6 +44,7 @@ def train(
     train_model(
         data_dir=data_dir,
         image_size=tuple(cfg.data.image_size),
+        defect_classes=list(cfg.data.defect_classes),
         batch_size=cfg.dataloader.batch_size,
         num_epochs=cfg.training.num_epochs,
         learning_rate=cfg.training.learning_rate,
