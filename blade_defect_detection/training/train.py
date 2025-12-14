@@ -258,7 +258,7 @@ def train_model(
         callbacks=[checkpoint_callback],
         accelerator="gpu",  # Explicitly use GPU
         devices=1,  # Use single GPU
-        precision="16-mixed",  # Mixed precision for faster training and less memory
+        precision="32",  # Full precision (16-mixed has issues with some optimizers)
         log_every_n_steps=10,
         enable_progress_bar=True,
     )
