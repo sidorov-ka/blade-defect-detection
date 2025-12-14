@@ -11,39 +11,54 @@ This project implements a deep learning pipeline for detecting and segmenting de
 ### Prerequisites
 
 - Python 3.9+
-- Poetry for dependency management
+- [uv](https://github.com/astral-sh/uv) for dependency management
 
 ### Installation
 
-1. Clone the repository:
+1. Install uv (if not already installed):
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Or using pip:
+```bash
+pip install uv
+```
+
+2. Clone the repository:
 ```bash
 git clone <repository-url>
 cd blade-defect-detection
 ```
 
-2. Install dependencies using Poetry:
+3. Install dependencies using uv:
 ```bash
-poetry install
+uv sync
 ```
 
-3. Activate the virtual environment:
+This will:
+- Create a virtual environment automatically
+- Install all project dependencies
+- Install development dependencies
+
+4. Activate the virtual environment:
 ```bash
-poetry shell
+source .venv/bin/activate
 ```
 
-Or if you prefer to activate manually:
+Or use uv to run commands directly:
 ```bash
-source $(poetry env info --path)/bin/activate
+uv run <command>
 ```
 
-4. Install pre-commit hooks:
+5. Install pre-commit hooks:
 ```bash
-pre-commit install
+uv run pre-commit install
 ```
 
-5. Verify installation:
+6. Verify installation:
 ```bash
-pre-commit run -a
+uv run pre-commit run -a
 ```
 
 ### Data Setup
@@ -103,6 +118,11 @@ Or configure remote tracking URI in `configs/mlflow.yaml`.
 
 Train the model with default configuration:
 ```bash
+uv run python commands.py train
+```
+
+Or if virtual environment is activated:
+```bash
 python commands.py train
 ```
 
@@ -110,7 +130,7 @@ python commands.py train
 
 Train with custom data directory:
 ```bash
-python commands.py train --data_dir=/path/to/data
+uv run python commands.py train --data_dir=/path/to/data
 ```
 
 ### Configuration
