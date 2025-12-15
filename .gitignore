@@ -44,7 +44,9 @@ htmlcov/
 .tox/
 
 # Data and models (managed by DVC)
-/data/
+# Keep data/ directory structure but ignore contents
+/data/*
+!data/.gitkeep
 # Keep models/ directory structure but ignore contents
 /models/*
 !models/.gitkeep
