@@ -44,8 +44,8 @@ htmlcov/
 .tox/
 
 # Data and models (managed by DVC)
-data/
-models/
+/data/
+/models/
 *.pth
 *.pt
 *.onnx
@@ -73,6 +73,7 @@ Thumbs.db
 *.log
 logs/
 training*.log
+lightning_logs/
 
 # PID files
 *.pid

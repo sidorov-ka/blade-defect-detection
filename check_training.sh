@@ -5,17 +5,36 @@ echo "=== Статус обучения ==="
 echo ""
 
 # Проверка процессов
-PROCESSES=$(ps aux | grep "commands.py train" | grep -v grep)
-if [ -z "$PROCESSES" ]; then
+# Ищем основной процесс обучения
+# PyTorch DataLoader с num_workers создает worker процессы для загрузки данных
+# Это нормальное поведение, не ошибка!
+
+MAIN_PROCESS=$(ps aux | grep "commands.py train" | grep -v grep | grep -E "(python|uv run)" | head -1)
+
+if [ -z "$MAIN_PROCESS" ]; then
     echo "❌ Обучение НЕ запущено"
 else
-    COUNT=$(echo "$PROCESSES" | wc -l)
-    if [ "$COUNT" -eq 1 ]; then
-        echo "✅ Обучение запущено (1 процесс)"
-        echo "$PROCESSES" | awk '{print "  PID:", $2, "| CPU:", $3"%", "| MEM:", $4"%", "| Time:", $10}'
+    # Подсчитываем все процессы, связанные с обучением
+    ALL_PROCESSES=$(ps aux | grep "commands.py train" | grep -v grep)
+    TOTAL_COUNT=$(echo "$ALL_PROCESSES" | wc -l)
+    
+    # Извлекаем PID основного процесса
+    MAIN_PID=$(echo "$MAIN_PROCESS" | awk '{print $2}')
+    
+    echo "✅ Обучение запущено"
+    echo "  Основной процесс:"
+    echo "$MAIN_PROCESS" | awk '{print "    PID:", $2, "| CPU:", $3"%", "| MEM:", $4"%", "| Time:", $10}'
+    
+    # Подсчитываем worker процессы (дочерние процессы основного Python процесса)
+    # Worker процессы создаются PyTorch DataLoader для параллельной загрузки данных
+    WORKER_COUNT=$(ps --ppid "$MAIN_PID" 2>/dev/null | tail -n +2 | wc -l)
+    
+    if [ "$WORKER_COUNT" -gt 0 ]; then
+        echo "  Worker процессов (DataLoader): $WORKER_COUNT"
+        echo "  Всего процессов: $TOTAL_COUNT (1 основной + ~$WORKER_COUNT workers)"
+        echo "  ℹ️  Это нормально! PyTorch создает worker процессы для загрузки данных (num_workers=4)"
     else
-        echo "⚠️  Запущено $COUNT процессов обучения (должен быть 1!)"
-        echo "$PROCESSES" | awk '{print "  PID:", $2, "| CPU:", $3"%", "| MEM:", $4"%"}'
+        echo "  Всего процессов: $TOTAL_COUNT"
     fi
 fi
 
@@ -71,4 +90,5 @@ if [ "$CHECKPOINTS" -gt 0 ]; then
 else
     echo "⚠️  Чекпоинты не найдены"
 fi
+
 

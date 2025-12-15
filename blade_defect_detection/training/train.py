@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
+import requests
 import torch
 import torch.nn as nn
 from pytorch_lightning import LightningModule, Trainer
@@ -231,17 +232,38 @@ def train_model(
     # MLflow logger (optional - only if server is available)
     mlflow_logger = None
     try:
-        mlflow_logger = MLFlowLogger(
-            experiment_name=experiment_name,
-            tracking_uri=mlflow_tracking_uri,
-            run_name=run_name,
-        )
-        # Test connection
-        _ = mlflow_logger.experiment
-        loggers.append(mlflow_logger)
-        print("MLflow logging enabled")
+        # Check if MLflow server is reachable before creating logger
+        if mlflow_tracking_uri.startswith("http"):
+            try:
+                # Try to connect to MLflow server with timeout
+                health_url = mlflow_tracking_uri.rstrip("/") + "/health"
+                response = requests.get(health_url, timeout=3)
+                if response.status_code != 200:
+                    raise ConnectionError(f"MLflow server returned status {response.status_code}")
+            except (requests.exceptions.RequestException, ConnectionError) as e:
+                print(f"MLflow server not reachable ({e}), using TensorBoard only")
+                mlflow_logger = None
+            else:
+                # Server is reachable, create logger
+                mlflow_logger = MLFlowLogger(
+                    experiment_name=experiment_name,
+                    tracking_uri=mlflow_tracking_uri,
+                    run_name=run_name,
+                )
+                loggers.append(mlflow_logger)
+                print("MLflow logging enabled")
+        else:
+            # File-based tracking, try to create logger
+            mlflow_logger = MLFlowLogger(
+                experiment_name=experiment_name,
+                tracking_uri=mlflow_tracking_uri,
+                run_name=run_name,
+            )
+            loggers.append(mlflow_logger)
+            print("MLflow logging enabled")
     except Exception as e:
-        print(f"MLflow server not available ({e}), using TensorBoard only")
+        print(f"MLflow logger initialization failed ({e}), using TensorBoard only")
+        mlflow_logger = None
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
