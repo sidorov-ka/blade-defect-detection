@@ -45,7 +45,9 @@ htmlcov/
 
 # Data and models (managed by DVC)
 /data/
-/models/
+# Keep models/ directory structure but ignore contents
+/models/*
+!models/.gitkeep
 *.pth
 *.pt
 *.onnx
@@ -75,7 +77,9 @@ logs/
 training*.log
 
 # PyTorch Lightning logs and checkpoints
-lightning_logs/
+# Keep lightning_logs/ directory structure but ignore contents
+lightning_logs/**/*
+!lightning_logs/.gitkeep
 
 # PID files
 *.pid
