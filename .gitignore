@@ -73,7 +73,10 @@ Thumbs.db
 *.log
 logs/
 training*.log
+
+# PyTorch Lightning logs and checkpoints
 lightning_logs/
+lightning_logs/**/version_*/
 
 # PID files
 *.pid
