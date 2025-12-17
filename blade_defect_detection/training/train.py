@@ -218,6 +218,13 @@ def train_model(
             data_dir, image_size=image_size, defect_classes=defect_classes
         )
         total_len = len(full_dataset)
+        if total_len == 0:
+            raise ValueError(
+                f"No samples found in data_dir={data_dir}. "
+                "Make sure data is downloaded via DVC "
+                "(e.g., `uv run dvc pull` or `uv run dvc checkout data.dvc`) "
+                "and the directory structure matches the README."
+            )
         train_size = max(1, int(0.7 * total_len))
         val_size = max(1, int(0.15 * total_len))
         test_size = total_len - train_size - val_size

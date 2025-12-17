@@ -29,19 +29,26 @@ def _reset_hydra() -> None:
 
 def _pull_dvc_data(data_path: Path) -> None:
     """Pull data from DVC if not available locally.
-    
+
     Args:
-        data_path: Path to data directory or file
+        data_path: Path to data directory or file.
     """
-    # Check if data exists and has content
-    if data_path.exists():
-        if data_path.is_dir() and list(data_path.glob("*")):
+    # If it's a directory – check that it contains at least one real image file.
+    if data_path.exists() and data_path.is_dir():
+        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+        has_images = any(
+            p.is_file() and p.suffix.lower() in image_extensions
+            for p in data_path.rglob("*")
+        )
+        if has_images:
             print(f"Data already exists at {data_path}, skipping DVC pull")
             return
-        elif data_path.is_file():
-            print(f"Data file already exists at {data_path}, skipping DVC pull")
-            return
-    
+
+    # If it's a regular file – consider it present and skip DVC pull.
+    if data_path.exists() and data_path.is_file():
+        print(f"Data file already exists at {data_path}, skipping DVC pull")
+        return
+
     print(f"Pulling data from DVC to {data_path}...")
     try:
         # Load credentials from .env if available
