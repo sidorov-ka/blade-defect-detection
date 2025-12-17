@@ -84,6 +84,10 @@ training*.log
 lightning_logs/**/*
 !lightning_logs/.gitkeep
 
+# Visualizations (predictions/images)
+/visualizations/*
+!visualizations/.gitkeep
+
 # PID files
 *.pid
 training*.pid

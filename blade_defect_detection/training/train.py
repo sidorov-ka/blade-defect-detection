@@ -1,16 +1,18 @@
-"""PyTorch Lightning module for training."""
+"""PyTorch Lightning module for training and inference."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import requests
 import torch
 import torch.nn as nn
+from PIL import Image, ImageDraw, ImageFont
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger, TensorBoardLogger
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset, random_split
 from torchmetrics import JaccardIndex, MetricCollection
+from torchvision import transforms
 
 from blade_defect_detection.data.dataset import BladeDefectDataset
 from blade_defect_detection.models.model import BladeDefectModel
@@ -49,12 +51,23 @@ class BladeDefectLightningModule(LightningModule):
         # Metrics
         self.train_metrics = MetricCollection(
             {
-                "train_iou": JaccardIndex(task="multiclass", num_classes=num_classes, average="macro"),
+                "train_iou": JaccardIndex(
+                    task="multiclass", num_classes=num_classes, average="macro"
+                ),
             }
         )
         self.val_metrics = MetricCollection(
             {
-                "val_iou": JaccardIndex(task="multiclass", num_classes=num_classes, average="macro"),
+                "val_iou": JaccardIndex(
+                    task="multiclass", num_classes=num_classes, average="macro"
+                ),
+            }
+        )
+        self.test_metrics = MetricCollection(
+            {
+                "test_iou": JaccardIndex(
+                    task="multiclass", num_classes=num_classes, average="macro"
+                ),
             }
         )
 
@@ -65,7 +78,7 @@ class BladeDefectLightningModule(LightningModule):
     def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Training step."""
         images, masks = batch
-        
+
         # Validate masks
         mask_min, mask_max = masks.min().item(), masks.max().item()
         if mask_min < 0 or mask_max >= self.num_classes:
@@ -73,15 +86,20 @@ class BladeDefectLightningModule(LightningModule):
                 f"Invalid mask values: min={mask_min}, max={mask_max}, "
                 f"expected range [0, {self.num_classes-1}]"
             )
-        
+
         logits = self(images)
         loss = self.criterion(logits, masks)
-        
+
         # Check for NaN or invalid loss
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"Warning: Invalid loss at step {batch_idx}: {loss.item()}")
-            print(f"  Logits: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
-            print(f"  Masks: min={mask_min}, max={mask_max}, unique={torch.unique(masks).tolist()}")
+            print(
+                f"  Logits: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
+                f"mean={logits.mean().item():.4f}"
+            )
+            print(
+                f"  Masks: min={mask_min}, max={mask_max}, unique={torch.unique(masks).tolist()}"
+            )
             # Use a small positive value instead of NaN
             loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
@@ -100,7 +118,7 @@ class BladeDefectLightningModule(LightningModule):
     def validation_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Validation step."""
         images, masks = batch
-        
+
         # Validate masks
         mask_min, mask_max = masks.min().item(), masks.max().item()
         if mask_min < 0 or mask_max >= self.num_classes:
@@ -108,10 +126,10 @@ class BladeDefectLightningModule(LightningModule):
                 f"Invalid mask values: min={mask_min}, max={mask_max}, "
                 f"expected range [0, {self.num_classes-1}]"
             )
-        
+
         logits = self(images)
         loss = self.criterion(logits, masks)
-        
+
         # Check for NaN or invalid loss
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"Warning: Invalid loss at val step {batch_idx}: {loss.item()}")
@@ -127,6 +145,17 @@ class BladeDefectLightningModule(LightningModule):
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log_dict(self.val_metrics, on_step=False, on_epoch=True)
 
+        return loss
+
+    def test_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
+        """Test step mirrors validation for reporting."""
+        images, masks = batch
+        logits = self(images)
+        loss = self.criterion(logits, masks)
+        preds = torch.argmax(logits, dim=1)
+        self.test_metrics(preds, masks)
+        self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log_dict(self.test_metrics, on_step=False, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
@@ -167,27 +196,38 @@ def train_model(
     """
     data_dir = Path(data_dir)
 
-    # Check if data is split into train/val or needs automatic splitting
+    # Check if data is split into train/val/test or needs automatic splitting
     train_dir = data_dir / "train"
     val_dir = data_dir / "val"
+    test_dir = data_dir / "test"
 
-    if train_dir.exists() and val_dir.exists():
-        # Use separate train/val directories
+    if train_dir.exists() and val_dir.exists() and test_dir.exists():
+        # Use separate train/val/test directories
         train_dataset = BladeDefectDataset(
             train_dir, image_size=image_size, defect_classes=defect_classes
         )
         val_dataset = BladeDefectDataset(
             val_dir, image_size=image_size, defect_classes=defect_classes
         )
+        test_dataset = BladeDefectDataset(
+            test_dir, image_size=image_size, defect_classes=defect_classes
+        )
     else:
-        # Create single dataset and split automatically (80/20)
+        # Create single dataset and split automatically (70/15/15)
         full_dataset = BladeDefectDataset(
             data_dir, image_size=image_size, defect_classes=defect_classes
         )
-        train_size = int(0.8 * len(full_dataset))
-        val_size = len(full_dataset) - train_size
-        train_dataset, val_dataset = random_split(
-            full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42)
+        total_len = len(full_dataset)
+        train_size = max(1, int(0.7 * total_len))
+        val_size = max(1, int(0.15 * total_len))
+        test_size = total_len - train_size - val_size
+        if test_size <= 0:
+            test_size = 1
+            train_size = max(1, train_size - 1)
+        train_dataset, val_dataset, test_dataset = random_split(
+            full_dataset,
+            [train_size, val_size, test_size],
+            generator=torch.Generator().manual_seed(42),
         )
 
     # Create dataloaders
@@ -200,6 +240,13 @@ def train_model(
     )
     val_loader = DataLoader(
         val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    test_loader = DataLoader(
+        test_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -221,14 +268,14 @@ def train_model(
 
     # Setup loggers
     loggers = []
-    
+
     # TensorBoard logger for easy visualization (always enabled)
+    # Убираем name, чтобы версии инкрементировались правильно в lightning_logs/version_X/
     tensorboard_logger = TensorBoardLogger(
         save_dir="lightning_logs",
-        name="blade_defect_detection",
     )
     loggers.append(tensorboard_logger)
-    
+
     # MLflow logger (optional - only if server is available)
     mlflow_logger = None
     try:
@@ -270,6 +317,7 @@ def train_model(
         monitor="val_loss",
         mode="min",
         save_top_k=1,
+        dirpath="models",
         filename="best-{epoch:02d}-{val_loss:.2f}",
     )
 
@@ -285,8 +333,9 @@ def train_model(
         enable_progress_bar=True,
     )
 
-    # Train
+    # Train + test
     trainer.fit(model, train_loader, val_loader)
+    trainer.test(model, test_loader)
 
     # Log additional metrics to MLflow (if available)
     if mlflow_logger is not None:
@@ -301,3 +350,117 @@ def train_model(
 
     return trainer, model
 
+
+def _mask_to_color(mask: torch.Tensor, palette: Sequence[tuple[int, int, int]]) -> Image.Image:
+    """Convert mask tensor [H, W] to a color PIL image using palette."""
+    mask_np = mask.cpu().numpy()
+    h, w = mask_np.shape
+    color_img = Image.new("RGB", (w, h))
+    pixels = color_img.load()
+    for i in range(h):
+        for j in range(w):
+            cls = int(mask_np[i, j])
+            color = palette[cls] if cls < len(palette) else (255, 255, 255)
+            pixels[j, i] = color
+    return color_img
+
+
+def predict_image(
+    image_path: Path,
+    checkpoint_path: Optional[Path] = None,
+    image_size: tuple = (256, 256),
+    defect_classes: Optional[Sequence[str]] = None,
+    output_path: Optional[Path] = None,
+) -> Path:
+    """Run prediction for a single image and save visualization.
+
+    Args:
+        image_path: Path to input image.
+        checkpoint_path: Path to .ckpt file. If None, latest from models/ is used.
+        image_size: Target image size (height, width).
+        defect_classes: List of defect class names.
+        output_path: Where to save visualization. Defaults to `visualizations/<stem>_pred.png`.
+    """
+    image_path = Path(image_path)
+
+    # Resolve checkpoint
+    if checkpoint_path is None:
+        models_dir = Path("models")
+        ckpts = sorted(models_dir.glob("*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not ckpts:
+            raise FileNotFoundError("No checkpoints found in models/ directory")
+        checkpoint_path = ckpts[0]
+    else:
+        checkpoint_path = Path(checkpoint_path)
+
+    # Load model from checkpoint
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = BladeDefectLightningModule.load_from_checkpoint(str(checkpoint_path))
+    model.to(device)
+    model.eval()
+
+    # Load and preprocess image
+    img = Image.open(image_path).convert("RGB")
+    img = img.resize(image_size, Image.BILINEAR)
+    to_tensor = transforms.ToTensor()
+    img_tensor = to_tensor(img).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        logits = model(img_tensor)
+        pred_mask = torch.argmax(logits, dim=1).squeeze(0).cpu()
+
+    # Prepare visualization
+    palette = [
+        (0, 0, 0),
+        (255, 0, 0),
+        (0, 255, 0),
+        (0, 0, 255),
+        (255, 255, 0),
+        (255, 0, 255),
+    ]
+    class_names = ["background"] + list(
+        defect_classes or ["dent", "nick", "scratch", "corrosion"]
+    )
+
+    base_image = img
+    pred_color = _mask_to_color(pred_mask, palette)
+    pred_overlay = Image.blend(base_image.convert("RGB"), pred_color, alpha=0.4)
+
+    # Major predicted class (excluding background)
+    if pred_mask.max() > 0:
+        pred_major = int(pred_mask[pred_mask > 0].mode()[0])
+    else:
+        pred_major = 0
+    pred_label = (
+        class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
+    )
+
+    # Create canvas with caption
+    combined_height = pred_overlay.height + 30
+    canvas = Image.new("RGB", (pred_overlay.width, combined_height), (255, 255, 255))
+    canvas.paste(pred_overlay, (0, 0))
+
+    caption = f"Predicted: {pred_label}"
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), caption, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    draw.text(
+        ((pred_overlay.width - text_w) // 2, combined_height - text_h - 5),
+        caption,
+        fill=(0, 0, 0),
+        font=font,
+    )
+
+    if output_path is None:
+        # Сохраняем в visualizations/ вместо рядом с исходным изображением
+        vis_dir = Path("visualizations")
+        vis_dir.mkdir(parents=True, exist_ok=True)
+        output_path = vis_dir / f"{image_path.stem}_pred.png"
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path)
+
+    return output_path
