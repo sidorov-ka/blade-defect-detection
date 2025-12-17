@@ -1,5 +1,8 @@
 """CLI commands for blade defect detection."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +25,51 @@ def _reset_hydra() -> None:
     """Utility to safely (re)initialize Hydra."""
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
+
+
+def _pull_dvc_data(data_path: Path) -> None:
+    """Pull data from DVC if not available locally.
+    
+    Args:
+        data_path: Path to data directory or file
+    """
+    # Check if data exists and has content
+    if data_path.exists():
+        if data_path.is_dir() and list(data_path.glob("*")):
+            print(f"Data already exists at {data_path}, skipping DVC pull")
+            return
+        elif data_path.is_file():
+            print(f"Data file already exists at {data_path}, skipping DVC pull")
+            return
+    
+    print(f"Pulling data from DVC to {data_path}...")
+    try:
+        # Load credentials from .env if available
+        env = os.environ.copy()
+        if os.path.exists(".env"):
+            with open(".env", "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        if key.startswith("AWS_"):
+                            env[key] = value
+        
+        # Pull specific data path from DVC
+        result = subprocess.run(
+            ["dvc", "pull", str(data_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        print("Data pulled successfully from DVC")
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Failed to pull data from DVC: {e.stderr}")
+        print("Continuing with local data if available...")
+    except FileNotFoundError:
+        print("Warning: DVC not found. Make sure DVC is installed.")
+        print("Continuing with local data if available...")
 
 
 def train(
@@ -47,6 +95,9 @@ def train(
 
     # Convert to absolute path
     data_dir_path = Path(cfg.data.data.data_dir).resolve()
+
+    # Pull data from DVC if needed
+    _pull_dvc_data(data_dir_path)
 
     # Print config
     print("Configuration:")
@@ -100,6 +151,9 @@ def predict(
     # Resolve checkpoint
     if checkpoint_path is None:
         models_dir = Path("models")
+        # Pull models from DVC if needed
+        if not models_dir.exists() or not list(models_dir.glob("*.ckpt")):
+            _pull_dvc_data(models_dir)
         ckpts = sorted(models_dir.glob("*.ckpt"))
         if not ckpts:
             raise FileNotFoundError("No checkpoints found in models/ directory")
@@ -180,5 +234,10 @@ def predict(
     return str(out_path)
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point."""
     fire.Fire()
+
+
+if __name__ == "__main__":
+    main()

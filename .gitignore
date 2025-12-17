@@ -96,4 +96,3 @@ training*.pid
 .env
 .env.local
 .env.*.local
-
