@@ -350,6 +350,9 @@ def train_model(
     )
 
     # Trainer with GPU support
+    # Use gradient accumulation to emulate larger batch size
+    # With batch_size=8 and accumulate_grad_batches=4, effective batch size = 32
+    accumulate_grad_batches = 4
     trainer = Trainer(
         max_epochs=num_epochs,
         logger=loggers,
@@ -357,6 +360,7 @@ def train_model(
         accelerator="gpu",  # Explicitly use GPU
         devices=1,  # Use single GPU
         precision="32",  # Full precision (16-mixed has issues with some optimizers)
+        accumulate_grad_batches=accumulate_grad_batches,  # Accumulate gradients
         log_every_n_steps=10,
         enable_progress_bar=True,
     )

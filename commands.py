@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -109,6 +110,16 @@ def train(
     print("Configuration:")
     print(OmegaConf.to_yaml(cfg))
 
+    # Generate run_name if not provided
+    run_name = cfg.mlflow.mlflow.run_name
+    if run_name is None:
+        image_size = tuple(cfg.data.data.image_size)
+        batch_size = cfg.data.dataloader.batch_size
+        lr = cfg.training.training.learning_rate
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_name = f"img{image_size[0]}x{image_size[1]}_bs{batch_size}_lr{lr}_{timestamp}"
+        print(f"Generated run_name: {run_name}")
+
     # Train
     train_model(
         data_dir=data_dir_path,
@@ -120,7 +131,7 @@ def train(
         num_workers=cfg.data.dataloader.num_workers,
         mlflow_tracking_uri=cfg.mlflow.mlflow.tracking_uri,
         experiment_name=cfg.mlflow.mlflow.experiment_name,
-        run_name=cfg.mlflow.mlflow.run_name,
+        run_name=run_name,
     )
 
 
@@ -206,8 +217,8 @@ def predict(
     # Remove background (class 0)
     defect_counts = {k: v for k, v in class_counts.items() if k > 0}
 
-    total_pixels = pred_mask.numel()  # 128 * 128 = 16384 for current config
-    # For small images (128x128), use lower threshold
+    total_pixels = pred_mask.numel()  # 256 * 256 = 65536 for current config
+    # For small images, use lower threshold
     # 0.5% = ~82 pixels, minimum 10 pixels to avoid noise
     min_defect_pixels = max(10, int(total_pixels * 0.005))  # At least 0.5% or 10 pixels
 

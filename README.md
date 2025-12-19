@@ -22,7 +22,7 @@ Manual inspection of turbine blades is time-consuming, subjective, and prone to 
 ### Technical Approach
 
 The solution uses a **UNet architecture** for semantic segmentation, which:
-- Takes RGB images of blades as input (128×128 pixels by default)
+- Takes RGB images of blades as input (256×256 pixels by default)
 - Outputs pixel-level class predictions (background + 4 defect types)
 - Provides precise spatial localization of defects
 - Handles multi-class segmentation with skip connections for detail preservation
@@ -281,9 +281,9 @@ All hyperparameters and settings are managed through **Hydra** hierarchical conf
 
 - `configs/config.yaml` - Main configuration file (composes all sub-configs)
 - `configs/data/dataset.yaml` - Dataset settings:
-  - Image size: `[128, 128]` (height, width)
+  - Image size: `[256, 256]` (height, width)
   - Defect classes: `[dent, nick, scratch, corrosion]`
-  - Batch size: `32`
+  - Batch size: `8` (with gradient accumulation, effective batch size: 32)
   - Number of workers: `4`
 - `configs/model/model.yaml` - Model architecture:
   - Input channels: `3` (RGB)
