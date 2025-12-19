@@ -361,18 +361,39 @@ def train_model(
         enable_progress_bar=True,
     )
 
-    # Train + test
+    # Train + validation
     trainer.fit(model, train_loader, val_loader)
-    trainer.test(model, test_loader)
 
-    # Log additional metrics to MLflow (if available)
+    # Test on test set
+    print("\n" + "=" * 50)
+    print("Running evaluation on test set...")
+    print("=" * 50)
+    test_results = trainer.test(model, test_loader)
+    
+    # Print test results
+    if test_results:
+        print("\nTest Results:")
+        for key, value in test_results[0].items():
+            if isinstance(value, (int, float)):
+                print(f"  {key}: {value:.4f}")
+
+    # Log test metrics explicitly to MLflow (if available)
     if mlflow_logger is not None:
         try:
+            # Log all callback metrics (includes test metrics after test())
             log_metrics_to_mlflow(
                 mlflow_logger.experiment,
                 mlflow_logger.run_id,
                 trainer.callback_metrics,
             )
+            
+            # Also explicitly log test results if available
+            if test_results:
+                with mlflow.start_run(run_id=mlflow_logger.run_id):
+                    for key, value in test_results[0].items():
+                        if isinstance(value, (int, float)):
+                            mlflow.log_metric(key, float(value))
+                print("Test metrics logged to MLflow")
         except Exception as e:
             print(f"Failed to log metrics to MLflow: {e}")
 
