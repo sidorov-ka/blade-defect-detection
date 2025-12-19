@@ -65,6 +65,7 @@ htmlcov/
 # MLflow
 mlruns/
 .mlflow/
+mlflow.db
 
 # Jupyter
 .ipynb_checkpoints/
