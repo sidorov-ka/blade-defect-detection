@@ -1,8 +1,10 @@
 """PyTorch Lightning module for training and inference."""
 
+import subprocess
 from pathlib import Path
 from typing import Optional, Sequence
 
+import mlflow
 import requests
 import torch
 import torch.nn as nn
@@ -277,9 +279,10 @@ def train_model(
     loggers = []
 
     # TensorBoard logger for easy visualization (always enabled)
-    # Убираем name, чтобы версии инкрементировались правильно в lightning_logs/version_X/
+    # Логи будут в lightning_logs/version_X/
     tensorboard_logger = TensorBoardLogger(
         save_dir="lightning_logs",
+        name=None,  # без дополнительной подпапки lightning_logs/
     )
     loggers.append(tensorboard_logger)
 
@@ -318,6 +321,24 @@ def train_model(
     except Exception as e:
         print(f"MLflow logger initialization failed ({e}), using TensorBoard only")
         mlflow_logger = None
+
+    # Log git commit id to MLflow (if available)
+    if mlflow_logger is not None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=Path.cwd(),
+            )
+            git_commit_id = result.stdout.strip() if result.returncode == 0 else "unknown"
+            
+            with mlflow.start_run(run_id=mlflow_logger.run_id):
+                mlflow.set_tag("git_commit_id", git_commit_id)
+            print(f"Logged git commit id to MLflow: {git_commit_id}")
+        except Exception as e:
+            print(f"Failed to log git commit id to MLflow: {e}")
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(

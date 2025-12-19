@@ -139,7 +139,7 @@ def predict(
         checkpoint_path: Optional path to model checkpoint (.ckpt). If not provided,
             the latest checkpoint from models/ is used.
         output_path: Optional path to save visualization. If not provided,
-            saves to models/pred_<stem>.png.
+            saves to visualizations/pred_<stem>.png.
         config_path: Hydra config path.
         config_name: Hydra config name.
 
@@ -229,7 +229,7 @@ def predict(
 
     # Save result
     if output_path is None:
-        out_dir = Path("models")
+        out_dir = Path("visualizations")
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"pred_{Path(image_path).stem}.png"
     else:
