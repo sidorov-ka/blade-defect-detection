@@ -1,7 +1,7 @@
 # Dataset configuration
 data:
   data_dir: ${oc.env:DATA_DIR,data}
-  image_size: [128, 128]  # [height, width] - reduced for faster training
+  image_size: [256, 256]  # [height, width]
   defect_classes:
     - dent
     - nick
