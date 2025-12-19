@@ -4,27 +4,57 @@ Deep learning pipeline for detecting and segmenting defects in aero-engine blade
 
 ## Project Description
 
-This project implements a complete MLOps pipeline for blade defect detection. The model performs multi-class segmentation to identify four types of defects:
-- **Dent** - surface dents
-- **Nick** - small cuts or nicks
-- **Scratch** - surface scratches
-- **Corrosion** - corrosion damage
+This project implements a complete MLOps pipeline for automated defect detection in aero-engine turbine blades. The system uses deep learning to perform pixel-level semantic segmentation, identifying and localizing four types of surface defects:
 
-The project uses:
-- **PyTorch Lightning** for training framework
-- **DVC** for data versioning with Yandex Object Storage (S3-compatible)
-- **Hydra** for configuration management
-- **MLflow** for experiment tracking
-- **TensorBoard** for real-time monitoring
+- **Dent** - surface dents and deformations
+- **Nick** - small cuts or nicks in the blade edge
+- **Scratch** - surface scratches and abrasions
+- **Corrosion** - corrosion damage and oxidation
+
+### Problem Statement
+
+Manual inspection of turbine blades is time-consuming, subjective, and prone to human error. This project automates the detection and classification of blade defects through computer vision, enabling:
+- Faster quality control in manufacturing
+- Consistent defect classification
+- Precise localization of defects for repair planning
+- Automated documentation of blade condition
+
+### Technical Approach
+
+The solution uses a **UNet architecture** for semantic segmentation, which:
+- Takes RGB images of blades as input (128×128 pixels by default)
+- Outputs pixel-level class predictions (background + 4 defect types)
+- Provides precise spatial localization of defects
+- Handles multi-class segmentation with skip connections for detail preservation
+
+### Model Architecture
+
+The model implements a **UNet** architecture with:
+- **Encoder**: 4 downsampling blocks (64→128→256→512 channels) with MaxPooling
+- **Bottleneck**: 1024-channel bottleneck layer
+- **Decoder**: 4 upsampling blocks with skip connections from encoder
+- **Output**: 5-class segmentation map (background + 4 defect types)
+
+Each block uses double convolutions (Conv2d + BatchNorm + ReLU) for feature extraction.
+
+### Key Technologies
+
+- **PyTorch Lightning** - Training framework with automatic GPU support and checkpointing
+- **DVC** - Data version control with Yandex Object Storage (S3-compatible) for 27GB dataset
+- **Hydra** - Hierarchical configuration management for hyperparameters
+- **MLflow** - Experiment tracking with metrics, hyperparameters, and git commit logging
+- **TensorBoard** - Real-time training visualization
+- **Ruff** - Fast Python linter and formatter (replaces black, isort, flake8)
 
 ## Features
 
-- ✅ Automatic data loading from DVC (cloud storage)
-- ✅ Configurable training pipeline with Hydra
-- ✅ Experiment tracking with MLflow and TensorBoard
-- ✅ Model checkpointing and versioning
-- ✅ Inference pipeline with visualization
-- ✅ Code quality tools (ruff, pre-commit)
+- ✅ **Automatic data management**: DVC integration with automatic pull on train/predict
+- ✅ **Flexible configuration**: Hydra-based hierarchical configs for all hyperparameters
+- ✅ **Comprehensive logging**: MLflow (metrics, hyperparameters, git commit id) + TensorBoard
+- ✅ **Model versioning**: Automatic checkpointing with best model selection
+- ✅ **Inference pipeline**: Single-command prediction with visualization
+- ✅ **Code quality**: Pre-commit hooks with ruff, prettier, and code quality checks
+- ✅ **Production-ready**: Error handling, graceful fallbacks, and comprehensive documentation
 
 ## Setup
 
@@ -144,7 +174,15 @@ data/
 - Normal images don't require masks (all background)
 - Masks should be binary (0=background, 255=defect) or normalized (0-1)
 
-The dataset can also be pre-split into train/val/test directories (see `configs/data/dataset.yaml`).
+The dataset can also be pre-split into train/val/test directories. If `data/train/`, `data/val/`, and `data/test/` exist, they will be used directly. Otherwise, the code automatically splits the dataset 70/15/15.
+
+### Dataset Statistics
+
+- **Total size**: ~27 GB
+- **Total files**: ~45,000 images
+- **Classes**: 4 defect types + background
+- **Format**: PNG images with corresponding mask files
+- **Storage**: Yandex Object Storage (S3-compatible) via DVC
 
 ## Usage
 
@@ -163,15 +201,23 @@ uv run python commands.py train --data_dir=/path/to/data
 **What happens during training**:
 1. DVC automatically checks for data in `data/` directory
 2. If data is missing, it pulls from cloud storage (or restores from cache)
-3. Loads configuration from `configs/`
-4. Trains UNet model for multi-class segmentation
-5. Saves best checkpoint to `models/`
-6. Logs metrics to MLflow and TensorBoard
+3. Loads hierarchical configuration from `configs/` using Hydra
+4. Creates train/val/test splits (70/15/15) if not pre-split
+5. Trains UNet model for multi-class segmentation with PyTorch Lightning
+6. Saves best checkpoint (lowest validation loss) to `models/best.ckpt`
+7. Logs metrics, hyperparameters, and git commit id to MLflow
+8. Logs real-time metrics to TensorBoard
 
 **Training outputs**:
-- Model checkpoints: `models/best-epoch=XX-val_loss=X.XX.ckpt`
-- TensorBoard logs: `lightning_logs/version_X/`
-- MLflow experiments: configured in `configs/mlflow/mlflow.yaml`
+- **Model checkpoints**: `models/best.ckpt` (best model), `lightning_logs/version_X/checkpoints/` (all checkpoints)
+- **TensorBoard logs**: `lightning_logs/version_X/` (real-time metrics)
+- **MLflow experiments**: `blade-defect-detection` experiment with all runs
+
+**Logged metrics**:
+- `train_loss`, `val_loss`, `test_loss` - CrossEntropy loss
+- `train_iou`, `val_iou`, `test_iou` - Jaccard Index (IoU) for segmentation quality
+- Hyperparameters: learning_rate, batch_size, num_epochs, image_size, etc.
+- Git commit ID as tag for reproducibility
 
 ### Inference (Prediction)
 
@@ -211,31 +257,74 @@ Open http://127.0.0.1:6006 in your browser to view:
 
 **MLflow UI** (if MLflow server is running):
 ```bash
-mlflow ui --host 127.0.0.1 --port 5000
+uv run mlflow ui --host 127.0.0.1 --port 5000
 ```
 
-Open http://127.0.0.1:5000 in your browser.
+Open http://127.0.0.1:5000 in your browser to view:
+- All training runs with metrics comparison
+- Hyperparameter search results
+- Git commit IDs for each run
+- Model artifacts and checkpoints
 
-**Start MLflow server** (if needed):
+**Start MLflow server** (required before training):
 ```bash
-mlflow server --host 127.0.0.1 --port 8080
+uv run mlflow server --host 127.0.0.1 --port 8080
 ```
+
+**Note**: The training code automatically detects if MLflow server is available. If not reachable, training continues with TensorBoard only (graceful fallback).
 
 ## Configuration
 
-All hyperparameters and settings are managed through Hydra configuration files in `configs/`:
+All hyperparameters and settings are managed through **Hydra** hierarchical configuration files in `configs/`:
 
-- `configs/config.yaml` - Main configuration file
-- `configs/data/dataset.yaml` - Dataset settings (image size, classes, batch size)
-- `configs/model/model.yaml` - Model architecture settings
-- `configs/training/training.yaml` - Training hyperparameters (epochs, learning rate)
-- `configs/mlflow/mlflow.yaml` - MLflow tracking settings
+### Configuration Structure
 
-**Modify configuration**:
-Edit the respective YAML files or override via command line:
+- `configs/config.yaml` - Main configuration file (composes all sub-configs)
+- `configs/data/dataset.yaml` - Dataset settings:
+  - Image size: `[128, 128]` (height, width)
+  - Defect classes: `[dent, nick, scratch, corrosion]`
+  - Batch size: `32`
+  - Number of workers: `4`
+- `configs/model/model.yaml` - Model architecture:
+  - Input channels: `3` (RGB)
+  - Number of classes: `5` (background + 4 defects)
+- `configs/training/training.yaml` - Training hyperparameters:
+  - Number of epochs: `10`
+  - Learning rate: `0.0001`
+  - Weight decay: `0.00001`
+  - Optimizer: `Adam`
+- `configs/mlflow/mlflow.yaml` - MLflow tracking:
+  - Tracking URI: `http://127.0.0.1:8080`
+  - Experiment name: `blade-defect-detection`
+  - Run name: auto-generated if null
+
+### Modifying Configuration
+
+**Option 1: Edit YAML files directly**
 ```bash
-uv run python commands.py train training.training.num_epochs=100
+# Edit configs/training/training.yaml
+num_epochs: 50
+learning_rate: 0.001
 ```
+
+**Option 2: Override via command line** (recommended for experiments)
+```bash
+uv run python commands.py train \
+    training.training.num_epochs=50 \
+    training.training.learning_rate=0.001 \
+    data.dataloader.batch_size=16
+```
+
+**Option 3: Use Hydra's multi-run** (for hyperparameter search)
+```bash
+uv run python commands.py train \
+    training.training.learning_rate=0.0001,0.001,0.01 \
+    -m
+```
+
+### No Magic Constants
+
+All hyperparameters are in configuration files. No hardcoded values in the code.
 
 ## Project Structure
 
@@ -317,42 +406,77 @@ git commit -m "Add trained model"
 
 ## Dependencies
 
-Main dependencies:
-- `pytorch-lightning>=2.0.0` - Training framework
-- `torchvision>=0.15.0` - Image transforms
-- `torchmetrics>=1.0.0` - Metrics (IoU)
-- `hydra-core>=1.3.0` - Configuration management
-- `omegaconf>=2.3.0` - Configuration format
-- `mlflow>=2.8.0` - Experiment tracking
+Dependencies are managed using **uv** (modern Python package manager) and defined in `pyproject.toml`.
+
+### Main Dependencies
+
+**Deep Learning & Training**:
+- `pytorch-lightning>=2.0.0` - Training framework with automatic GPU support
+- `torchvision>=0.15.0` - Image transforms and utilities
+- `torchmetrics>=1.0.0` - Metrics (JaccardIndex/IoU for segmentation)
+
+**Configuration & CLI**:
+- `hydra-core>=1.3.0` - Hierarchical configuration management
+- `omegaconf>=2.3.0` - Configuration format (used by Hydra)
+- `fire>=0.5.0` - CLI framework (replaces argparse)
+
+**Data Management**:
 - `dvc>=3.0.0` - Data version control
-- `dvc-s3>=3.0.0` - S3 support for DVC
-- `fire>=0.5.0` - CLI framework
+- `dvc-s3>=3.0.0` - S3-compatible storage support (for Yandex Object Storage)
+
+**Experiment Tracking**:
+- `mlflow>=2.8.0` - Experiment tracking and model registry
+- `tensorboard>=2.20.0` - Real-time training visualization
+
+**Utilities**:
 - `pillow>=10.0.0` - Image processing
 - `numpy>=1.24.0` - Numerical operations
-- `tensorboard>=2.20.0` - Visualization
-- `requests>=2.31.0` - HTTP requests
+- `requests>=2.31.0` - HTTP requests (for MLflow health checks)
 
-Development dependencies:
-- `ruff>=0.1.0` - Linter and formatter
-- `pre-commit>=3.0.0` - Git hooks
+### Development Dependencies
+
+- `ruff>=0.1.0` - Fast linter and formatter (replaces black, isort, flake8)
+- `pre-commit>=3.0.0` - Git hooks for code quality
 - `pytest>=7.4.0` - Testing framework
-- `ipykernel>=6.0.0` - Jupyter support
+- `ipykernel>=6.0.0` - Jupyter notebook support
 
-See `pyproject.toml` for complete dependency list.
+### Installation
+
+All dependencies are installed automatically with:
+```bash
+uv sync
+```
+
+This creates a virtual environment (`.venv/`) and installs all dependencies from `pyproject.toml` and `uv.lock`.
 
 ## Development
 
-### Code Quality
+### Code Quality Tools
 
-**Run linter and formatter**:
+The project uses **pre-commit** hooks with the following tools:
+
+- **Ruff** - Fast Python linter and formatter (replaces black, isort, flake8)
+- **Prettier** - Formatter for YAML, JSON, TOML, Markdown files
+- **Pre-commit hooks** - Basic checks (YAML, JSON, large files, trailing whitespace, etc.)
+- **Codespell** - Spell checker for code
+
+**Configuration**: All tools are configured in:
+- `pyproject.toml` - Ruff settings (line length, target version, rules)
+- `.pre-commit-config.yaml` - Pre-commit hooks configuration
+
+**Run code quality checks**:
 ```bash
-uv run ruff check .
-uv run ruff format .
+# Run all pre-commit hooks
+uv run pre-commit run -a
+
+# Or run individual tools
+uv run ruff check .          # Lint
+uv run ruff format .         # Format
 ```
 
-**Run pre-commit hooks**:
+**Install pre-commit hooks** (runs automatically on git commit):
 ```bash
-uv run pre-commit run -a
+uv run pre-commit install
 ```
 
 ### Testing
@@ -361,6 +485,14 @@ uv run pre-commit run -a
 ```bash
 uv run pytest
 ```
+
+### Code Style
+
+- **File naming**: `snake_case` for Python files (e.g., `dataset.py`, not `Dataset.py`)
+- **Package naming**: `snake_case` for package directory (`blade_defect_detection`)
+- **Line length**: 100 characters (configured in `pyproject.toml`)
+- **Import style**: Organized with ruff (isort replacement)
+- **No magic constants**: All values in Hydra configs or constants files
 
 ## Troubleshooting
 
@@ -377,13 +509,40 @@ uv run pytest
 **Problem**: CUDA out of memory
 **Solution**: Reduce `batch_size` in `configs/data/dataset.yaml` or image size
 
-**Problem**: MLflow connection timeout
-**Solution**: The code handles MLflow failures gracefully - training will continue with TensorBoard only
+**Problem**: MLflow connection timeout or server not running
+**Solution**: The code automatically detects MLflow server availability with a 3-second timeout. If unreachable, training continues with TensorBoard only (graceful fallback). Start MLflow server before training: `uv run mlflow server --host 127.0.0.1 --port 8080`
 
 ### Data Issues
 
 **Problem**: Invalid mask values error
 **Solution**: Ensure masks are binary (0-255) or normalized (0-1), and class indices are in range [0, num_classes-1]
+
+## Metrics and Evaluation
+
+### Training Metrics
+
+The model is evaluated using:
+
+- **Loss**: CrossEntropyLoss for multi-class segmentation
+- **IoU (Jaccard Index)**: Macro-averaged IoU across all classes
+  - Measures overlap between predicted and ground truth masks
+  - Range: [0, 1], higher is better
+  - Logged separately for train/val/test sets
+
+### Test Set
+
+The test set is either:
+- Pre-split: Uses `data/test/` directory if available
+- Auto-split: 15% of the full dataset (70% train, 15% val, 15% test)
+
+Test metrics are logged after training completes and can be viewed in MLflow and TensorBoard.
+
+## Reproducibility
+
+- **Git commit ID**: Automatically logged to MLflow as a tag for each training run
+- **Random seeds**: Fixed seed (42) for dataset splitting
+- **Configuration**: All hyperparameters stored in Hydra configs
+- **Data versioning**: DVC tracks dataset versions via `data.dvc`
 
 ## License
 
@@ -398,3 +557,4 @@ uv run pytest
 - PyTorch Lightning team for the excellent training framework
 - DVC team for data versioning tools
 - Hydra team for configuration management
+- UNet architecture: Original paper by Ronneberger et al. (2015)
