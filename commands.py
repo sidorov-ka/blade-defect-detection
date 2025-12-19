@@ -2,7 +2,6 @@
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -200,13 +199,54 @@ def predict(
     pred_overlay = Image.blend(img.convert("RGB"), pred_color, alpha=0.4)
 
     # Determine main predicted class (excluding background)
-    if pred_mask.max() > 0:
-        pred_major = int(pred_mask[pred_mask > 0].mode()[0])
+    # Count pixels for each class
+    unique_classes, counts = torch.unique(pred_mask, return_counts=True)
+    class_counts = dict(zip(unique_classes.tolist(), counts.tolist()))
+
+    # Remove background (class 0)
+    defect_counts = {k: v for k, v in class_counts.items() if k > 0}
+
+    total_pixels = pred_mask.numel()  # 128 * 128 = 16384 for current config
+    # For small images (128x128), use lower threshold
+    # 0.5% = ~82 pixels, minimum 10 pixels to avoid noise
+    min_defect_pixels = max(10, int(total_pixels * 0.005))  # At least 0.5% or 10 pixels
+
+    if defect_counts:
+        # Find class with largest area
+        pred_major = max(defect_counts, key=defect_counts.get)
+        defect_pixels = defect_counts[pred_major]
+        defect_area = defect_pixels / total_pixels
+
+        if defect_pixels >= min_defect_pixels:
+            pred_label = (
+                class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
+            )
+
+            # Show all detected classes with their areas
+            detected_info = []
+            for cls_id in sorted(defect_counts.keys()):
+                if cls_id < len(class_names):
+                    cls_pixels = defect_counts[cls_id]
+                    cls_area = cls_pixels / total_pixels
+                    if cls_pixels >= min_defect_pixels:
+                        detected_info.append(f"{class_names[cls_id]} ({cls_area*100:.1f}%)")
+
+            if detected_info:
+                print(f"Detected classes: {', '.join(detected_info)}")
+                print(f"Main class: {pred_label} ({defect_area*100:.1f}%, {defect_pixels} pixels)")
+        else:
+            pred_major = 0
+            pred_label = "background"
+            largest_area = defect_area * 100
+            print(
+                f"No significant defect detected "
+                f"(largest: {largest_area:.2f}%, {defect_pixels} pixels, "
+                f"threshold: {min_defect_pixels} pixels)"
+            )
     else:
         pred_major = 0
-    pred_label = (
-        class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
-    )
+        pred_label = "background"
+        print("No defects detected")
 
     # Add caption
     canvas = Image.new(
