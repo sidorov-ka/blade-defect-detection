@@ -30,7 +30,8 @@ class BladeDefectDataset(Dataset):
         Args:
             data_dir: Root directory containing images/ and masks/ folders
             image_size: Target size for resizing (height, width)
-            defect_classes: List of defect class names (e.g., ['dent', 'nick', 'scratch', 'corrosion'])
+            defect_classes: List of defect class names
+                (e.g., ['dent', 'nick', 'scratch', 'corrosion'])
             transform: Optional torchvision transforms
         """
         self.data_dir = Path(data_dir)
@@ -151,8 +152,12 @@ class BladeDefectDataset(Dataset):
         mask_tensor = torch.from_numpy(mask_array).long()  # [H, W] int64
         
         # Final validation
-        assert mask_tensor.min() >= 0 and mask_tensor.max() < self.num_classes, \
-            f"Mask validation failed: min={mask_tensor.min()}, max={mask_tensor.max()}, num_classes={self.num_classes}"
+        assert (
+            mask_tensor.min() >= 0 and mask_tensor.max() < self.num_classes
+        ), (
+            f"Mask validation failed: min={mask_tensor.min()}, "
+            f"max={mask_tensor.max()}, num_classes={self.num_classes}"
+        )
 
         # Apply transforms if provided
         if self.transform:

@@ -279,10 +279,10 @@ def train_model(
     loggers = []
 
     # TensorBoard logger for easy visualization (always enabled)
-    # Логи будут в lightning_logs/version_X/
+    # Logs will be in lightning_logs/version_X/
     tensorboard_logger = TensorBoardLogger(
         save_dir="lightning_logs",
-        name=None,  # без дополнительной подпапки lightning_logs/
+        name=None,  # No additional lightning_logs/ subfolder
     )
     loggers.append(tensorboard_logger)
 
@@ -301,15 +301,72 @@ def train_model(
                 print(f"MLflow server not reachable ({e}), using TensorBoard only")
                 mlflow_logger = None
             else:
-                # Server is reachable, create logger
-                mlflow_logger = MLFlowLogger(
-                    experiment_name=experiment_name,
-                    tracking_uri=mlflow_tracking_uri,
-                    run_name=run_name,
-                )
-                loggers.append(mlflow_logger)
-                print("MLflow logging enabled")
+                # Server is reachable, ensure experiment exists before creating logger
+                try:
+                    mlflow.set_tracking_uri(mlflow_tracking_uri)
+                    # Get or create experiment to avoid race condition
+                    try:
+                        experiment = mlflow.get_experiment_by_name(experiment_name)
+                        if experiment is None:
+                            experiment_id = mlflow.create_experiment(experiment_name)
+                            print(
+                                f"Created MLflow experiment: {experiment_name} "
+                                f"(ID: {experiment_id})"
+                            )
+                        else:
+                            experiment_id = experiment.experiment_id
+                            print(
+                                f"Using existing MLflow experiment: "
+                                f"{experiment_name} (ID: {experiment_id})"
+                            )
+                    except Exception as exp_err:
+                        # If get_experiment_by_name fails, try to create
+                        try:
+                            experiment_id = mlflow.create_experiment(experiment_name)
+                            print(
+                                f"Created MLflow experiment: {experiment_name} "
+                                f"(ID: {experiment_id})"
+                            )
+                        except Exception as create_err:
+                            raise Exception(
+                                f"Failed to get/create experiment: "
+                                f"get={exp_err}, create={create_err}"
+                            )
+                    
+                    # Set active experiment to prevent MLFlowLogger from trying to create it
+                    mlflow.set_experiment(experiment_name)
+                    print(f"Set active experiment: {experiment_name}")
+                    
+                except Exception as e:
+                    print(f"Failed to setup MLflow experiment ({e}), using TensorBoard only")
+                    import traceback
+                    traceback.print_exc()
+                    mlflow_logger = None
+                else:
+                    # Create logger - experiment is already set as active
+                    try:
+                        mlflow_logger = MLFlowLogger(
+                            experiment_name=experiment_name,
+                            tracking_uri=mlflow_tracking_uri,
+                            run_name=run_name,
+                        )
+                        loggers.append(mlflow_logger)
+                        print(f"MLflow logging enabled for run: {run_name}")
+                    except Exception as e:
+                        print(f"MLflow logger creation failed ({e}), using TensorBoard only")
+                        import traceback
+                        traceback.print_exc()
+                        mlflow_logger = None
         else:
+            # File-based tracking, ensure experiment exists
+            try:
+                mlflow.set_tracking_uri(mlflow_tracking_uri)
+                experiment = mlflow.get_experiment_by_name(experiment_name)
+                if experiment is None:
+                    mlflow.create_experiment(experiment_name)
+            except Exception:
+                pass  # Ignore errors for file-based tracking
+            
             # File-based tracking, try to create logger
             mlflow_logger = MLFlowLogger(
                 experiment_name=experiment_name,
@@ -323,7 +380,8 @@ def train_model(
         mlflow_logger = None
 
     # Log git commit id to MLflow (if available)
-    if mlflow_logger is not None:
+    # Note: This is done after logger is created, so run_id should be available
+    if mlflow_logger is not None and hasattr(mlflow_logger, 'run_id') and mlflow_logger.run_id:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -334,11 +392,14 @@ def train_model(
             )
             git_commit_id = result.stdout.strip() if result.returncode == 0 else "unknown"
             
+            # Set tracking URI before logging
+            mlflow.set_tracking_uri(mlflow_tracking_uri)
             with mlflow.start_run(run_id=mlflow_logger.run_id):
                 mlflow.set_tag("git_commit_id", git_commit_id)
             print(f"Logged git commit id to MLflow: {git_commit_id}")
         except Exception as e:
-            print(f"Failed to log git commit id to MLflow: {e}")
+            # Silently ignore errors - this is not critical
+            pass
 
     # Callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -507,7 +568,7 @@ def predict_image(
     )
 
     if output_path is None:
-        # Сохраняем в visualizations/ вместо рядом с исходным изображением
+        # Save to visualizations/ instead of next to the source image
         vis_dir = Path("visualizations")
         vis_dir.mkdir(parents=True, exist_ok=True)
         output_path = vis_dir / f"{image_path.stem}_pred.png"
