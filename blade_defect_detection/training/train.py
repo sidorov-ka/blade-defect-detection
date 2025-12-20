@@ -308,12 +308,37 @@ def train_model(
                     try:
                         experiment = mlflow.get_experiment_by_name(experiment_name)
                         if experiment is None:
+                            # Experiment doesn't exist, create it
                             experiment_id = mlflow.create_experiment(experiment_name)
                             print(
                                 f"Created MLflow experiment: {experiment_name} "
                                 f"(ID: {experiment_id})"
                             )
+                        elif experiment.lifecycle_stage == "deleted":
+                            # Experiment exists but is deleted
+                            # Try to restore it, if that fails, delete permanently and create new
+                            from mlflow.tracking import MlflowClient
+                            client = MlflowClient(mlflow_tracking_uri)
+                            try:
+                                client.restore_experiment(experiment.experiment_id)
+                                experiment_id = experiment.experiment_id
+                                print(
+                                    f"Restored deleted MLflow experiment: "
+                                    f"{experiment_name} (ID: {experiment_id})"
+                                )
+                            except Exception:
+                                # If restore fails, delete permanently and create new
+                                try:
+                                    client.delete_experiment(experiment.experiment_id)
+                                except Exception:
+                                    pass  # Ignore if already deleted
+                                experiment_id = mlflow.create_experiment(experiment_name)
+                                print(
+                                    f"Created new MLflow experiment (old was deleted): "
+                                    f"{experiment_name} (ID: {experiment_id})"
+                                )
                         else:
+                            # Experiment exists and is active
                             experiment_id = experiment.experiment_id
                             print(
                                 f"Using existing MLflow experiment: "
