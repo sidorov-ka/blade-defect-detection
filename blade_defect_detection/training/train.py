@@ -8,7 +8,6 @@ import mlflow
 import requests
 import torch
 import torch.nn as nn
-from PIL import Image, ImageDraw, ImageFont
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger, TensorBoardLogger
@@ -265,13 +264,15 @@ def train_model(
             "Check your data directory structure."
         )
 
-    # Create dataloaders
+    # Create dataloaders with memory optimizations
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,  # Reuse workers
+        prefetch_factor=2,  # Reduce prefetching to save memory
     )
     val_loader = DataLoader(
         val_dataset,
@@ -279,6 +280,8 @@ def train_model(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=2,
     )
     test_loader = DataLoader(
         test_dataset,
@@ -286,6 +289,8 @@ def train_model(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=2,
     )
 
     # Get number of classes from dataset
@@ -464,10 +469,11 @@ def train_model(
         verbose=True,  # Print checkpoint info
     )
 
-    # Trainer with GPU support
+    # Trainer with GPU support and memory optimizations
     # Use gradient accumulation to emulate larger batch size
-    # With batch_size=8 and accumulate_grad_batches=4, effective batch size = 32
-    accumulate_grad_batches = 4
+    # With batch_size=6 and accumulate_grad_batches=6, effective batch size = 36
+    # Combined with mixed precision (16-bit) for ~2x memory reduction
+    accumulate_grad_batches = 6
     trainer = Trainer(
         max_epochs=num_epochs,
         min_epochs=1,  # Minimum epochs to train
@@ -475,7 +481,7 @@ def train_model(
         callbacks=[checkpoint_callback],
         accelerator="gpu",  # Explicitly use GPU
         devices=1,  # Use single GPU
-        precision="32",  # Full precision (16-mixed has issues with some optimizers)
+        precision="16-mixed",  # Mixed precision: ~2x memory reduction, often faster
         accumulate_grad_batches=accumulate_grad_batches,  # Accumulate gradients
         log_every_n_steps=10,
         enable_progress_bar=True,
@@ -490,7 +496,10 @@ def train_model(
     print(f"  Val batches: {len(val_loader)}")
     print(f"  Test batches: {len(test_loader)}")
     print(f"  Batch size: {batch_size}")
+    print(f"  Gradient accumulation: {accumulate_grad_batches}")
     print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
+    print(f"  Precision: 16-mixed (for memory efficiency)")
+    print(f"  Model: Reduced channels (48->96->192->384->768)")
     
     # Warn if dataset is very small
     if len(train_loader) < 5:
@@ -501,15 +510,24 @@ def train_model(
     
     # Train + validation
     print(f"\nStarting training for {num_epochs} epochs...")
-    print(f"Expected training time: ~{len(train_loader) * num_epochs / 60:.1f} minutes (rough estimate)")
+    print(
+        f"Expected training time: "
+        f"~{len(train_loader) * num_epochs / 60:.1f} minutes (rough estimate)"
+    )
     try:
         print(f"Calling trainer.fit() for {num_epochs} epochs...")
         trainer.fit(model, train_loader, val_loader)
         actual_epochs = trainer.current_epoch + 1
         print(f"\n✓ Training completed successfully after {actual_epochs} epochs!")
-        print(f"Trainer state: current_epoch={trainer.current_epoch}, max_epochs={trainer.max_epochs}")
+        print(
+            f"Trainer state: current_epoch={trainer.current_epoch}, "
+            f"max_epochs={trainer.max_epochs}"
+        )
         if actual_epochs < num_epochs:
-            print(f"⚠ WARNING: Training stopped after {actual_epochs} epochs instead of {num_epochs}!")
+            print(
+                f"⚠ WARNING: Training stopped after {actual_epochs} epochs "
+                f"instead of {num_epochs}!"
+            )
             print("This may indicate an issue. Check logs above for errors.")
     except KeyboardInterrupt:
         print(f"\n⚠ Training interrupted by user")
@@ -521,7 +539,10 @@ def train_model(
         # Don't raise - continue to test if possible
         print("Continuing to test evaluation despite training error...")
     finally:
-        print(f"After trainer.fit(): current_epoch={trainer.current_epoch}, max_epochs={trainer.max_epochs}")
+        print(
+            f"After trainer.fit(): current_epoch={trainer.current_epoch}, "
+            f"max_epochs={trainer.max_epochs}"
+        )
 
     # Test on test set (always run test, even if training stopped early)
     # This helps with debugging and we still get test metrics
@@ -590,116 +611,3 @@ def train_model(
     return trainer, model
 
 
-def _mask_to_color(mask: torch.Tensor, palette: Sequence[tuple[int, int, int]]) -> Image.Image:
-    """Convert mask tensor [H, W] to a color PIL image using palette."""
-    mask_np = mask.cpu().numpy()
-    h, w = mask_np.shape
-    color_img = Image.new("RGB", (w, h))
-    pixels = color_img.load()
-    for i in range(h):
-        for j in range(w):
-            cls = int(mask_np[i, j])
-            color = palette[cls] if cls < len(palette) else (255, 255, 255)
-            pixels[j, i] = color
-    return color_img
-
-
-def predict_image(
-    image_path: Path,
-    checkpoint_path: Optional[Path] = None,
-    image_size: tuple = (256, 256),
-    defect_classes: Optional[Sequence[str]] = None,
-    output_path: Optional[Path] = None,
-) -> Path:
-    """Run prediction for a single image and save visualization.
-
-    Args:
-        image_path: Path to input image.
-        checkpoint_path: Path to .ckpt file. If None, latest from models/ is used.
-        image_size: Target image size (height, width).
-        defect_classes: List of defect class names.
-        output_path: Where to save visualization. Defaults to `visualizations/<stem>_pred.png`.
-    """
-    image_path = Path(image_path)
-
-    # Resolve checkpoint
-    if checkpoint_path is None:
-        models_dir = Path("models")
-        ckpts = sorted(models_dir.glob("*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not ckpts:
-            raise FileNotFoundError("No checkpoints found in models/ directory")
-        checkpoint_path = ckpts[0]
-    else:
-        checkpoint_path = Path(checkpoint_path)
-
-    # Load model from checkpoint
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BladeDefectLightningModule.load_from_checkpoint(str(checkpoint_path))
-    model.to(device)
-    model.eval()
-
-    # Load and preprocess image
-    img = Image.open(image_path).convert("RGB")
-    img = img.resize(image_size, Image.BILINEAR)
-    to_tensor = transforms.ToTensor()
-    img_tensor = to_tensor(img).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        logits = model(img_tensor)
-        pred_mask = torch.argmax(logits, dim=1).squeeze(0).cpu()
-
-    # Prepare visualization
-    palette = [
-        (0, 0, 0),
-        (255, 0, 0),
-        (0, 255, 0),
-        (0, 0, 255),
-        (255, 255, 0),
-        (255, 0, 255),
-    ]
-    class_names = ["background"] + list(
-        defect_classes or ["dent", "nick", "scratch", "corrosion"]
-    )
-
-    base_image = img
-    pred_color = _mask_to_color(pred_mask, palette)
-    pred_overlay = Image.blend(base_image.convert("RGB"), pred_color, alpha=0.4)
-
-    # Major predicted class (excluding background)
-    if pred_mask.max() > 0:
-        pred_major = int(pred_mask[pred_mask > 0].mode()[0])
-    else:
-        pred_major = 0
-    pred_label = (
-        class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
-    )
-
-    # Create canvas with caption
-    combined_height = pred_overlay.height + 30
-    canvas = Image.new("RGB", (pred_overlay.width, combined_height), (255, 255, 255))
-    canvas.paste(pred_overlay, (0, 0))
-
-    caption = f"Predicted: {pred_label}"
-    draw = ImageDraw.Draw(canvas)
-    font = ImageFont.load_default()
-    bbox = draw.textbbox((0, 0), caption, font=font)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    draw.text(
-        ((pred_overlay.width - text_w) // 2, combined_height - text_h - 5),
-        caption,
-        fill=(0, 0, 0),
-        font=font,
-    )
-
-    if output_path is None:
-        # Save to visualizations/ instead of next to the source image
-        vis_dir = Path("visualizations")
-        vis_dir.mkdir(parents=True, exist_ok=True)
-        output_path = vis_dir / f"{image_path.stem}_pred.png"
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(output_path)
-
-    return output_path

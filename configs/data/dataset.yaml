@@ -1,7 +1,7 @@
 # Dataset configuration
 data:
   data_dir: ${oc.env:DATA_DIR,data}
-  image_size: [256, 256]  # [height, width]
+  image_size: [192, 192]  # [height, width] - Reduced from 256x256 to save memory
   defect_classes:
     - dent
     - nick
@@ -10,7 +10,7 @@ data:
 
 # DataLoader configuration
 dataloader:
-  batch_size: 8  # Reduced for 256x256 images to fit GPU memory
-  num_workers: 4
+  batch_size: 6  # Optimized for memory efficiency with gradient accumulation
+  num_workers: 2  # Reduced to save RAM
   pin_memory: true
 

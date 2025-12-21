@@ -7,18 +7,12 @@ from pathlib import Path
 from typing import Optional
 
 import fire
-import torch
 from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
-from PIL import Image, ImageDraw, ImageFont
-from torchvision import transforms
 
-from blade_defect_detection.training.train import (
-    BladeDefectLightningModule,
-    _mask_to_color,
-    train_model,
-)
+from blade_defect_detection.inference.predict import predict_image
+from blade_defect_detection.training.train import train_model
 
 
 def _reset_hydra() -> None:
@@ -145,16 +139,16 @@ def predict(
     """Run prediction on a single image and save visualization.
 
     Args:
-        image_path: Path to input image.
-        checkpoint_path: Optional path to model checkpoint (.ckpt). If not provided,
-            the latest checkpoint from models/ is used.
-        output_path: Optional path to save visualization. If not provided,
-            saves to visualizations/pred_<stem>.png.
-        config_path: Hydra config path.
-        config_name: Hydra config name.
+        image_path: Path to input image
+        checkpoint_path: Optional path to model checkpoint (.ckpt).
+            If not provided, the latest checkpoint from models/ is used
+        output_path: Optional path to save visualization.
+            If not provided, saves to visualizations/pred_<stem>.png
+        config_path: Hydra config path
+        config_name: Hydra config name
 
     Returns:
-        Path to saved visualization as string.
+        Path to saved visualization as string
     """
     _reset_hydra()
 
@@ -163,133 +157,23 @@ def predict(
 
     image_size = tuple(cfg.data.data.image_size)
     defect_classes = list(cfg.data.data.defect_classes)
-    class_names = ["background"] + defect_classes
 
-    # Resolve checkpoint
+    # Pull models from DVC if needed
     if checkpoint_path is None:
         models_dir = Path("models")
-        # Pull models from DVC if needed
         if not models_dir.exists() or not list(models_dir.glob("*.ckpt")):
             _pull_dvc_data(models_dir)
-        ckpts = sorted(models_dir.glob("*.ckpt"))
-        if not ckpts:
-            raise FileNotFoundError("No checkpoints found in models/ directory")
-        checkpoint = ckpts[-1]
-    else:
-        checkpoint = Path(checkpoint_path)
 
-    print(f"Using checkpoint: {checkpoint}")
-
-    # Load model from checkpoint
-    model = BladeDefectLightningModule.load_from_checkpoint(checkpoint)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-    model.eval()
-
-    # Load and preprocess image (same basic logic as dataset)
-    img = Image.open(image_path).convert("RGB")
-    img = img.resize(image_size, Image.BILINEAR)
-    to_tensor = transforms.ToTensor()
-    img_tensor = to_tensor(img).unsqueeze(0).to(device)  # [1, 3, H, W]
-
-    with torch.no_grad():
-        logits = model(img_tensor)
-        pred_mask = torch.argmax(logits, dim=1).squeeze(0).cpu()
-
-    # Build simple palette (same as training visualization)
-    palette = [
-        (0, 0, 0),
-        (255, 0, 0),
-        (0, 255, 0),
-        (0, 0, 255),
-        (255, 255, 0),
-        (255, 0, 255),
-    ]
-
-    pred_color = _mask_to_color(pred_mask, palette)
-    pred_overlay = Image.blend(img.convert("RGB"), pred_color, alpha=0.4)
-
-    # Determine main predicted class (excluding background)
-    # Count pixels for each class
-    unique_classes, counts = torch.unique(pred_mask, return_counts=True)
-    class_counts = dict(zip(unique_classes.tolist(), counts.tolist()))
-
-    # Remove background (class 0)
-    defect_counts = {k: v for k, v in class_counts.items() if k > 0}
-
-    total_pixels = pred_mask.numel()  # 256 * 256 = 65536 for current config
-    # For small images, use lower threshold
-    # 0.5% = ~82 pixels, minimum 10 pixels to avoid noise
-    min_defect_pixels = max(10, int(total_pixels * 0.005))  # At least 0.5% or 10 pixels
-
-    if defect_counts:
-        # Find class with largest area
-        pred_major = max(defect_counts, key=defect_counts.get)
-        defect_pixels = defect_counts[pred_major]
-        defect_area = defect_pixels / total_pixels
-
-        if defect_pixels >= min_defect_pixels:
-            pred_label = (
-                class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
-            )
-
-            # Show all detected classes with their areas
-            detected_info = []
-            for cls_id in sorted(defect_counts.keys()):
-                if cls_id < len(class_names):
-                    cls_pixels = defect_counts[cls_id]
-                    cls_area = cls_pixels / total_pixels
-                    if cls_pixels >= min_defect_pixels:
-                        detected_info.append(f"{class_names[cls_id]} ({cls_area*100:.1f}%)")
-
-            if detected_info:
-                print(f"Detected classes: {', '.join(detected_info)}")
-                print(f"Main class: {pred_label} ({defect_area*100:.1f}%, {defect_pixels} pixels)")
-        else:
-            pred_major = 0
-            pred_label = "background"
-            largest_area = defect_area * 100
-            print(
-                f"No significant defect detected "
-                f"(largest: {largest_area:.2f}%, {defect_pixels} pixels, "
-                f"threshold: {min_defect_pixels} pixels)"
-            )
-    else:
-        pred_major = 0
-        pred_label = "background"
-        print("No defects detected")
-
-    # Add caption
-    canvas = Image.new(
-        "RGB", (pred_overlay.width, pred_overlay.height + 30), (255, 255, 255)
-    )
-    canvas.paste(pred_overlay, (0, 0))
-
-    caption = f"Predicted: {pred_label}"
-    draw = ImageDraw.Draw(canvas)
-    font = ImageFont.load_default()
-    bbox = draw.textbbox((0, 0), caption, font=font)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    draw.text(
-        ((canvas.width - text_w) // 2, canvas.height - text_h - 5),
-        caption,
-        fill=(0, 0, 0),
-        font=font,
+    # Use predict_image from inference module
+    result_path = predict_image(
+        image_path=Path(image_path),
+        checkpoint_path=Path(checkpoint_path) if checkpoint_path else None,
+        image_size=image_size,
+        defect_classes=defect_classes,
+        output_path=Path(output_path) if output_path else None,
     )
 
-    # Save result
-    if output_path is None:
-        out_dir = Path("visualizations")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"pred_{Path(image_path).stem}.png"
-    else:
-        out_path = Path(output_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    canvas.save(out_path)
-    print(f"Saved prediction visualization to: {out_path}")
-    return str(out_path)
+    return str(result_path)
 
 
 def main():
