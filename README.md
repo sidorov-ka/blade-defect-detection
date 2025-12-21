@@ -2,6 +2,29 @@
 
 Deep learning pipeline for detecting and segmenting defects in aero-engine blades using multi-class semantic segmentation.
 
+## Context
+
+This project is conceptually based on the paper  
+**"BladeSynth: A High-Quality Rendering-Based Synthetic Dataset for Aero Engine Blade Defect Inspection"**  
+(*Scientific Data*, 2025).  
+DOI: https://doi.org/10.1038/s41597-025-05563-y
+
+The paper introduces a rendering-based synthetic data generation pipeline for industrial defect inspection. Instead of data-driven generative models, defects are created using explicit analytical and procedural formulations applied to CAD-based aero-engine blade geometry.
+
+### Key Concepts from the Paper
+
+- **Mapping 3D blade surfaces to 2D texture space** using UV unwrapping
+- **Procedural defect modeling** via parametric height maps:
+  - **Dents** modeled as quadratic surfaces with depth parameters and noise
+  - **Scratches** modeled using linear/quadratic profiles with absolute terms
+  - **Corrosion** generated using stochastic noise fields affecting color and roughness maps
+  - **Nicks** generated through volumetric Boolean subtraction of perturbed geometric primitives
+- Use of spatial masks and noise functions to introduce realistic surface irregularities
+- **Domain randomization** over camera pose, lighting conditions, materials, backgrounds, and defect parameters
+- **Physically Based Rendering (PBR)** to produce photorealistic RGB images paired with pixel-level segmentation masks
+
+The paper demonstrates that models trained solely on the generated synthetic data generalize to real-world inspection images (sim-to-real transfer), making this approach suitable as a reference for reproducible and scalable ML/MLOps pipelines based on synthetic data.
+
 ## Project Description
 
 This project implements a complete MLOps pipeline for automated defect detection in aero-engine turbine blades. The system uses deep learning to perform pixel-level semantic segmentation, identifying and localizing four types of surface defects:
@@ -183,6 +206,23 @@ The dataset can also be pre-split into train/val/test directories. If `data/trai
 - **Classes**: 4 defect types + background
 - **Format**: PNG images with corresponding mask files
 - **Storage**: Yandex Object Storage (S3-compatible) via DVC
+- **Type**: Synthetic data generated using BladeSynth pipeline (rendering-based)
+
+### Dataset Generation Method
+
+The dataset is generated using the BladeSynth pipeline, which:
+
+1. **Maps 3D blade CAD models to 2D texture space** using UV unwrapping
+2. **Applies procedural defect models** to create realistic surface defects:
+   - Dents: Quadratic surfaces with depth and noise parameters
+   - Scratches: Linear/quadratic profiles with absolute terms
+   - Corrosion: Stochastic noise fields affecting color and roughness
+   - Nicks: Volumetric Boolean operations on geometric primitives
+3. **Renders photorealistic images** using Physically Based Rendering (PBR)
+4. **Generates pixel-level masks** automatically during rendering
+5. **Applies domain randomization** to camera, lighting, materials, and defect parameters
+
+This synthetic approach enables training models that generalize to real-world inspection scenarios, as demonstrated in the original paper.
 
 ## Usage
 
@@ -554,7 +594,8 @@ Test metrics are logged after training completes and can be viewed in MLflow and
 
 ## Acknowledgments
 
-- PyTorch Lightning team for the excellent training framework
-- DVC team for data versioning tools
-- Hydra team for configuration management
-- UNet architecture: Original paper by Ronneberger et al. (2015)
+- **BladeSynth Dataset**: This project uses the synthetic dataset generation pipeline from the paper "BladeSynth: A High-Quality Rendering-Based Synthetic Dataset for Aero Engine Blade Defect Inspection" (*Scientific Data*, 2025). DOI: https://doi.org/10.1038/s41597-025-05563-y
+- **PyTorch Lightning** team for the excellent training framework
+- **DVC** team for data versioning tools
+- **Hydra** team for configuration management
+- **UNet architecture**: Original paper by Ronneberger et al. (2015)
