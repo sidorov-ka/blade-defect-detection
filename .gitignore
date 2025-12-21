@@ -26,6 +26,10 @@ env/
 ENV/
 .venv
 
+# UV
+.python-version
+uv.lock
+
 # IDE
 .vscode/
 .idea/
@@ -40,8 +44,13 @@ htmlcov/
 .tox/
 
 # Data and models (managed by DVC)
-data/
-models/
+# Keep data/ directory structure but ignore contents (files only)
+/data/**/*
+!/data/**/
+!data/README.md
+# Keep models/ directory structure but ignore contents
+/models/*
+!models/.gitkeep
 *.pth
 *.pt
 *.onnx
@@ -56,6 +65,7 @@ models/
 # MLflow
 mlruns/
 .mlflow/
+mlflow.db
 
 # Jupyter
 .ipynb_checkpoints/
@@ -68,9 +78,22 @@ Thumbs.db
 # Logs
 *.log
 logs/
+training*.log
+
+# PyTorch Lightning logs and checkpoints
+# Keep lightning_logs/ directory structure but ignore contents
+lightning_logs/**/*
+!lightning_logs/.gitkeep
+
+# Visualizations (predictions/images)
+/visualizations/*
+!visualizations/.gitkeep
+
+# PID files
+*.pid
+training*.pid
 
 # Environment variables
 .env
 .env.local
 .env.*.local
-
