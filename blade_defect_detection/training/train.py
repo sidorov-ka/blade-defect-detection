@@ -472,7 +472,8 @@ def train_model(
     # Trainer with GPU support and memory optimizations
     # Use gradient accumulation to emulate larger batch size
     # With batch_size=6 and accumulate_grad_batches=6, effective batch size = 36
-    # Combined with mixed precision (16-bit) for ~2x memory reduction
+    # Note: Using full precision (32-bit) due to NaN issues with mixed precision
+    # and gradient accumulation. Memory is saved through reduced model size.
     accumulate_grad_batches = 6
     trainer = Trainer(
         max_epochs=num_epochs,
@@ -481,13 +482,14 @@ def train_model(
         callbacks=[checkpoint_callback],
         accelerator="gpu",  # Explicitly use GPU
         devices=1,  # Use single GPU
-        precision="16-mixed",  # Mixed precision: ~2x memory reduction, often faster
+        precision="32",  # Full precision (16-mixed causes NaN with gradient accumulation)
         accumulate_grad_batches=accumulate_grad_batches,  # Accumulate gradients
         log_every_n_steps=10,
         enable_progress_bar=True,
         enable_model_summary=True,  # Show model summary
         check_val_every_n_epoch=1,  # Validate every epoch
         val_check_interval=1.0,  # Validate after each training epoch
+        gradient_clip_val=1.0,  # Gradient clipping to prevent NaN
     )
 
     # Print dataloader info
@@ -498,7 +500,7 @@ def train_model(
     print(f"  Batch size: {batch_size}")
     print(f"  Gradient accumulation: {accumulate_grad_batches}")
     print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
-    print(f"  Precision: 16-mixed (for memory efficiency)")
+    print(f"  Precision: 32-bit (full precision for stability)")
     print(f"  Model: Reduced channels (48->96->192->384->768)")
     
     # Warn if dataset is very small
