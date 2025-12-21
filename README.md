@@ -586,11 +586,11 @@ Test metrics are logged after training completes and can be viewed in MLflow and
 
 ## License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Authors
 
-[Add your name and contact information]
+- **Sidorov Konstantin** - <kasidorov@gmail.com>
 
 ## Acknowledgments
 
