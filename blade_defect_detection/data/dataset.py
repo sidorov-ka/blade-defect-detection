@@ -163,9 +163,10 @@ class BladeDefectDataset(Dataset):
             mask_tensor = torch.clamp(mask_tensor, 0, self.num_classes - 1)
 
         # Apply transforms if provided
+        # Note: For segmentation, we apply color transforms to image only
+        # Geometric transforms (rotation, flip) would need special handling
+        # to apply to both image and mask, so we use only color augmentation
         if self.transform:
-            # Note: transforms should handle both image and mask together
-            # For now, we apply to image only
             image_tensor = self.transform(image_tensor)
 
         return image_tensor, mask_tensor

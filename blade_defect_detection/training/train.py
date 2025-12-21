@@ -8,8 +8,9 @@ import mlflow
 import requests
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger, TensorBoardLogger
 from torch.utils.data import DataLoader, Subset, random_split
 from torchmetrics import JaccardIndex, MetricCollection
@@ -76,6 +77,36 @@ class BladeDefectLightningModule(LightningModule):
         """Forward pass."""
         return self.model(x)
 
+    def dice_loss(
+        self, pred: torch.Tensor, target: torch.Tensor, num_classes: int, smooth: float = 1e-6
+    ) -> torch.Tensor:
+        """Compute Dice Loss for multi-class segmentation.
+
+        Args:
+            pred: Logits tensor [B, num_classes, H, W]
+            target: Target masks [B, H, W] with class indices
+            num_classes: Number of classes
+            smooth: Smoothing factor to avoid division by zero
+
+        Returns:
+            Dice loss value (scalar tensor)
+        """
+        pred_softmax = F.softmax(pred, dim=1)
+        target_one_hot = F.one_hot(target, num_classes).permute(0, 3, 1, 2).float()
+
+        dice_scores = []
+        for i in range(num_classes):
+            pred_i = pred_softmax[:, i]
+            target_i = target_one_hot[:, i]
+            intersection = (pred_i * target_i).sum(dim=(1, 2))  # Sum over H, W
+            union = pred_i.sum(dim=(1, 2)) + target_i.sum(dim=(1, 2))
+            dice = (2 * intersection + smooth) / (union + smooth)
+            dice_scores.append(dice)
+
+        # Average over classes and batches
+        dice_loss = 1 - torch.stack(dice_scores).mean()
+        return dice_loss
+
     def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Training step."""
         images, masks = batch
@@ -137,7 +168,15 @@ class BladeDefectLightningModule(LightningModule):
             masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
-        loss = self.criterion(logits, masks)
+        
+        # Combined loss: CrossEntropy + Dice Loss
+        loss_ce = self.criterion_ce(logits, masks)
+        loss_dice = self.dice_loss(logits, masks, self.num_classes)
+        loss = 0.5 * loss_ce + 0.5 * loss_dice
+        
+        # Log individual losses for monitoring
+        self.log("val_loss_ce", loss_ce, on_step=False, on_epoch=True)
+        self.log("val_loss_dice", loss_dice, on_step=False, on_epoch=True)
 
         # Check for NaN or invalid loss
         if torch.isnan(loss) or torch.isinf(loss):
@@ -160,7 +199,9 @@ class BladeDefectLightningModule(LightningModule):
         """Test step mirrors validation for reporting."""
         images, masks = batch
         logits = self(images)
-        loss = self.criterion(logits, masks)
+        loss_ce = self.criterion_ce(logits, masks)
+        loss_dice = self.dice_loss(logits, masks, self.num_classes)
+        loss = 0.5 * loss_ce + 0.5 * loss_dice
         preds = torch.argmax(logits, dim=1)
         self.test_metrics(preds, masks)
         self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -168,13 +209,33 @@ class BladeDefectLightningModule(LightningModule):
         return loss
 
     def configure_optimizers(self):
-        """Configure optimizer."""
+        """Configure optimizer and learning rate scheduler."""
         optimizer = torch.optim.Adam(
             self.parameters(),
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        return optimizer
+        
+        # Learning rate scheduler: reduce LR when validation loss plateaus
+        # This helps fine-tune the model and improve convergence
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",  # Minimize validation loss
+            factor=0.5,  # Reduce LR by half
+            patience=3,  # Wait 3 epochs without improvement
+            verbose=True,  # Print when LR is reduced
+            min_lr=1e-6,  # Minimum learning rate
+        )
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_loss",  # Monitor validation loss
+                "interval": "epoch",  # Update every epoch
+                "frequency": 1,
+            },
+        }
 
 
 def train_model(
@@ -240,11 +301,42 @@ def train_model(
         if test_size <= 0:
             test_size = 1
             train_size = max(1, train_size - 1)
-        train_dataset, val_dataset, test_dataset = random_split(
+        train_subset, val_subset, test_subset = random_split(
             full_dataset,
             [train_size, val_size, test_size],
             generator=torch.Generator().manual_seed(42),
         )
+        
+        # Create train dataset with augmentation using train subset indices
+        # Create a new dataset instance with augmentation and filter samples
+        train_dataset = BladeDefectDataset(
+            data_dir,
+            image_size=image_size,
+            defect_classes=defect_classes,
+            transform=train_transform,
+        )
+        # Filter samples to match train subset
+        train_indices = set(train_subset.indices)
+        train_dataset.samples = [
+            sample for i, sample in enumerate(full_dataset.samples) if i in train_indices
+        ]
+        
+        # Create val and test datasets without augmentation
+        val_dataset = BladeDefectDataset(
+            data_dir, image_size=image_size, defect_classes=defect_classes
+        )
+        val_indices = set(val_subset.indices)
+        val_dataset.samples = [
+            sample for i, sample in enumerate(full_dataset.samples) if i in val_indices
+        ]
+        
+        test_dataset = BladeDefectDataset(
+            data_dir, image_size=image_size, defect_classes=defect_classes
+        )
+        test_indices = set(test_subset.indices)
+        test_dataset.samples = [
+            sample for i, sample in enumerate(full_dataset.samples) if i in test_indices
+        ]
 
     # Check dataset sizes before creating dataloaders
     print(f"\nDataset sizes:")
@@ -468,6 +560,17 @@ def train_model(
         save_last=True,  # Also save last checkpoint
         verbose=True,  # Print checkpoint info
     )
+    
+    # Early stopping: stop training if validation loss doesn't improve
+    # This prevents overfitting and saves training time
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss",
+        min_delta=0.001,  # Minimum change to qualify as improvement
+        patience=5,  # Number of epochs to wait before stopping
+        mode="min",  # Minimize validation loss
+        verbose=True,  # Print when early stopping is triggered
+        check_finite=True,  # Stop if loss becomes NaN or Inf
+    )
 
     # Trainer with GPU support and memory optimizations
     # Use gradient accumulation to emulate larger batch size
@@ -479,7 +582,7 @@ def train_model(
         max_epochs=num_epochs,
         min_epochs=1,  # Minimum epochs to train
         logger=loggers,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, early_stop_callback],
         accelerator="gpu",  # Explicitly use GPU
         devices=1,  # Use single GPU
         precision="32",  # Full precision (16-mixed causes NaN with gradient accumulation)
@@ -502,6 +605,10 @@ def train_model(
     print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
     print(f"  Precision: 32-bit (full precision for stability)")
     print(f"  Model: Reduced channels (48->96->192->384->768)")
+    print(f"  Loss: Combined CrossEntropy + Dice Loss (optimizes IoU)")
+    print(f"  Augmentation: Color jitter (brightness, contrast, saturation, hue)")
+    print(f"  LR Scheduler: ReduceLROnPlateau (patience=3, factor=0.5)")
+    print(f"  Early Stopping: Enabled (patience=5)")
     
     # Warn if dataset is very small
     if len(train_loader) < 5:
