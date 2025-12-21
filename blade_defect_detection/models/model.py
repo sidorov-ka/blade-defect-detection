@@ -17,7 +17,6 @@ class DoubleConv(nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
         )
-        # Initialize weights properly to prevent NaN
         self._initialize_weights()
 
     def _initialize_weights(self):
@@ -46,21 +45,13 @@ class UNet(nn.Module):
         super().__init__()
         self.num_classes = num_classes
 
-        # Encoder (downsampling) - Further optimized for memory efficiency
-        # Reduced channels: 40->80->160->320->640 (vs original 64->128->256->512->1024)
-        # This reduces parameters by ~2x while maintaining good performance
-        # Slightly smaller to compensate for Dice Loss computation on validation
         self.enc1 = DoubleConv(in_channels, 40)
         self.enc2 = DoubleConv(40, 80)
         self.enc3 = DoubleConv(80, 160)
         self.enc4 = DoubleConv(160, 320)
 
         self.pool = nn.MaxPool2d(2)
-
-        # Bottleneck
         self.bottleneck = DoubleConv(320, 640)
-
-        # Decoder (upsampling)
         self.up4 = nn.ConvTranspose2d(640, 320, kernel_size=2, stride=2)
         self.dec4 = DoubleConv(640, 320)
 
@@ -85,16 +76,12 @@ class UNet(nn.Module):
         Returns:
             Output tensor [B, num_classes, H, W]
         """
-        # Encoder
         e1 = self.enc1(x)
         e2 = self.enc2(self.pool(e1))
         e3 = self.enc3(self.pool(e2))
         e4 = self.enc4(self.pool(e3))
 
-        # Bottleneck
         b = self.bottleneck(self.pool(e4))
-
-        # Decoder with skip connections
         d4 = self.up4(b)
         d4 = torch.cat([d4, e4], dim=1)
         d4 = self.dec4(d4)
@@ -110,8 +97,6 @@ class UNet(nn.Module):
         d1 = self.up1(d2)
         d1 = torch.cat([d1, e1], dim=1)
         d1 = self.dec1(d1)
-
-        # Final output
         out = self.final(d1)
 
         return out

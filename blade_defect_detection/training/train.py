@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 
 import mlflow
 import requests
@@ -49,18 +49,12 @@ class BladeDefectLightningModule(LightningModule):
         # Model
         self.model = BladeDefectModel(num_classes=num_classes)
 
-        # Loss functions
-        # CrossEntropy with class weights for imbalanced data
-        # Class weights help focus on minority classes (defects)
         if class_weights is not None:
-            # Store weights to move to device later
             self.register_buffer("class_weights", class_weights)
             self.criterion_ce = nn.CrossEntropyLoss(weight=self.class_weights)
         else:
             self.criterion_ce = nn.CrossEntropyLoss()
-        # Dice Loss for better IoU optimization (directly optimizes segmentation quality)
 
-        # Metrics
         self.train_metrics = MetricCollection(
             {
                 "train_iou": JaccardIndex(
@@ -102,18 +96,13 @@ class BladeDefectLightningModule(LightningModule):
             Dice loss value (scalar tensor)
         """
         pred_softmax = F.softmax(pred, dim=1)
-        
-        # Memory-efficient one-hot: use scatter instead of F.one_hot + permute
-        # This avoids creating intermediate tensor and is faster
         target_one_hot = torch.zeros_like(pred_softmax)
         target_one_hot.scatter_(1, target.unsqueeze(1), 1.0)
-        
-        # Vectorized computation: compute all classes at once (much faster than loop)
-        intersection = (pred_softmax * target_one_hot).sum(dim=(2, 3))  # [B, num_classes]
-        union = pred_softmax.sum(dim=(2, 3)) + target_one_hot.sum(dim=(2, 3))  # [B, num_classes]
-        dice = (2 * intersection + smooth) / (union + smooth)  # [B, num_classes]
-        
-        # Average over classes and batches
+
+        intersection = (pred_softmax * target_one_hot).sum(dim=(2, 3))
+        union = pred_softmax.sum(dim=(2, 3)) + target_one_hot.sum(dim=(2, 3))
+        dice = (2 * intersection + smooth) / (union + smooth)
+
         dice_loss = 1 - dice.mean()
         return dice_loss
 
@@ -121,28 +110,18 @@ class BladeDefectLightningModule(LightningModule):
         """Training step."""
         images, masks = batch
 
-        # Validate masks (with warning instead of error to not stop training)
         mask_min, mask_max = masks.min().item(), masks.max().item()
         if mask_min < 0 or mask_max >= self.num_classes:
             print(
                 f"WARNING: Invalid mask values at train step {batch_idx}: "
                 f"min={mask_min}, max={mask_max}, "
-                f"expected range [0, {self.num_classes-1}]. "
-                f"Clamping to valid range."
+                f"expected range [0, {self.num_classes-1}]. Clamping to valid range."
             )
-            # Clamp masks to valid range instead of raising error
             masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
-        
-        # Training: Only CrossEntropy for speed (same as original model)
-        # Dice Loss is computed only on validation to optimize IoU without slowing training
         loss = self.criterion_ce(logits, masks)
-        
-        # Log loss
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
-        # Check for NaN or invalid loss
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"Warning: Invalid loss at step {batch_idx}: {loss.item()}")
             print(
@@ -152,16 +131,11 @@ class BladeDefectLightningModule(LightningModule):
             print(
                 f"  Masks: min={mask_min}, max={mask_max}, unique={torch.unique(masks).tolist()}"
             )
-            # Use a small positive value instead of NaN
             loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
-        # Compute predictions
         preds = torch.argmax(logits, dim=1)
-
-        # Update metrics
         self.train_metrics(preds, masks)
 
-        # Log
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         self.log_dict(self.train_metrics, on_step=False, on_epoch=True)
 
@@ -171,42 +145,30 @@ class BladeDefectLightningModule(LightningModule):
         """Validation step."""
         images, masks = batch
 
-        # Validate masks (with warning instead of error to not stop training)
         mask_min, mask_max = masks.min().item(), masks.max().item()
         if mask_min < 0 or mask_max >= self.num_classes:
             print(
                 f"WARNING: Invalid mask values at val step {batch_idx}: "
                 f"min={mask_min}, max={mask_max}, "
-                f"expected range [0, {self.num_classes-1}]. "
-                f"Clamping to valid range."
+                f"expected range [0, {self.num_classes-1}]. Clamping to valid range."
             )
-            # Clamp masks to valid range instead of raising error
             masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
-        
-        # Validation: Combined loss (CrossEntropy + Dice) to optimize IoU
-        # Dice Loss is computed only on validation to keep training fast
         loss_ce = self.criterion_ce(logits, masks)
         loss_dice = self.dice_loss(logits, masks, self.num_classes)
-        loss = 0.5 * loss_ce + 0.5 * loss_dice  # Increased Dice weight to optimize IoU
-        
-        # Log individual losses for monitoring
+        loss = 0.5 * loss_ce + 0.5 * loss_dice
+
         self.log("val_loss_ce", loss_ce, on_step=False, on_epoch=True)
         self.log("val_loss_dice", loss_dice, on_step=False, on_epoch=True)
 
-        # Check for NaN or invalid loss
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"Warning: Invalid loss at val step {batch_idx}: {loss.item()}")
             loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
-        # Compute predictions
         preds = torch.argmax(logits, dim=1)
-
-        # Update metrics
         self.val_metrics(preds, masks)
 
-        # Log combined loss and metrics
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log_dict(self.val_metrics, on_step=False, on_epoch=True)
 
@@ -234,22 +196,20 @@ class BladeDefectLightningModule(LightningModule):
             weight_decay=self.weight_decay,
         )
         
-        # Learning rate scheduler: reduce LR when validation loss plateaus
-        # This helps fine-tune the model and improve convergence
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode="min",  # Minimize validation loss
-            factor=0.5,  # Reduce LR by half
-            patience=3,  # Wait 3 epochs without improvement
-            min_lr=1e-6,  # Minimum learning rate
+            mode="min",
+            factor=0.5,
+            patience=3,
+            min_lr=1e-6,
         )
         
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss",  # Monitor validation loss
-                "interval": "epoch",  # Update every epoch
+                "monitor": "val_loss",
+                "interval": "epoch",
                 "frequency": 1,
             },
         }
@@ -283,15 +243,12 @@ def train_model(
     """
     data_dir = Path(data_dir)
 
-    # Data augmentation for training (only for train dataset)
-    # Note: For segmentation, we need to apply same transforms to image and mask
-    # Color augmentation only affects images, geometric transforms affect both
     train_transform = transforms.Compose([
         transforms.ColorJitter(
-            brightness=0.2,  # Random brightness adjustment
-            contrast=0.2,  # Random contrast adjustment
-            saturation=0.2,  # Random saturation adjustment
-            hue=0.1,  # Random hue adjustment
+            brightness=0.2,
+            contrast=0.2,
+            saturation=0.2,
+            hue=0.1,
         ),
     ])
 
@@ -301,13 +258,11 @@ def train_model(
     test_dir = data_dir / "test"
 
     if train_dir.exists() and val_dir.exists() and test_dir.exists():
-        # Use separate train/val/test directories
-        # Apply augmentation only to training dataset
         train_dataset = BladeDefectDataset(
             train_dir,
             image_size=image_size,
             defect_classes=defect_classes,
-            transform=train_transform,  # Apply augmentation to train
+            transform=train_transform,
         )
         val_dataset = BladeDefectDataset(
             val_dir, image_size=image_size, defect_classes=defect_classes
@@ -316,7 +271,6 @@ def train_model(
             test_dir, image_size=image_size, defect_classes=defect_classes
         )
     else:
-        # Create single dataset and split automatically (70/15/15)
         full_dataset = BladeDefectDataset(
             data_dir, image_size=image_size, defect_classes=defect_classes
         )
@@ -339,22 +293,18 @@ def train_model(
             [train_size, val_size, test_size],
             generator=torch.Generator().manual_seed(42),
         )
-        
-        # Create train dataset with augmentation using train subset indices
-        # Create a new dataset instance with augmentation and filter samples
+
         train_dataset = BladeDefectDataset(
             data_dir,
             image_size=image_size,
             defect_classes=defect_classes,
             transform=train_transform,
         )
-        # Filter samples to match train subset
         train_indices = set(train_subset.indices)
         train_dataset.samples = [
             sample for i, sample in enumerate(full_dataset.samples) if i in train_indices
         ]
-        
-        # Create val and test datasets without augmentation
+
         val_dataset = BladeDefectDataset(
             data_dir, image_size=image_size, defect_classes=defect_classes
         )
@@ -362,7 +312,7 @@ def train_model(
         val_dataset.samples = [
             sample for i, sample in enumerate(full_dataset.samples) if i in val_indices
         ]
-        
+
         test_dataset = BladeDefectDataset(
             data_dir, image_size=image_size, defect_classes=defect_classes
         )
@@ -371,33 +321,30 @@ def train_model(
             sample for i, sample in enumerate(full_dataset.samples) if i in test_indices
         ]
 
-    # Check dataset sizes before creating dataloaders
     print(f"\nDataset sizes:")
     print(f"  Train: {len(train_dataset)} samples")
     print(f"  Val: {len(val_dataset)} samples")
     print(f"  Test: {len(test_dataset)} samples")
-    
+
     if len(val_dataset) == 0:
         raise ValueError(
             "Validation dataset is empty! Cannot train without validation data. "
             "Check your data directory structure."
         )
-    
+
     if len(train_dataset) == 0:
         raise ValueError(
             "Training dataset is empty! Cannot train without training data. "
             "Check your data directory structure."
         )
-
-    # Create dataloaders with memory optimizations
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=True if num_workers > 0 else False,  # Reuse workers
-        prefetch_factor=2,  # Reduce prefetching to save memory
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=2,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -418,65 +365,45 @@ def train_model(
         prefetch_factor=2,
     )
 
-    # Get number of classes from dataset
-    # If using random_split, access the underlying dataset
     if isinstance(train_dataset, torch.utils.data.Subset):
         num_classes = train_dataset.dataset.num_classes
     else:
         num_classes = train_dataset.num_classes
 
-    # Compute class weights for imbalanced data
-    # This helps the model focus on minority classes (defects) instead of just background
     print("\nComputing class weights from training data...")
     class_counts = torch.zeros(num_classes, dtype=torch.float32)
-    
-    # Sample a subset of training data to compute class distribution
-    # (computing on full dataset would be too slow)
     sample_size = min(1000, len(train_dataset))
     sample_indices = torch.randperm(len(train_dataset))[:sample_size]
-    
+
     for idx in sample_indices:
         _, mask = train_dataset[idx]
         unique, counts = torch.unique(mask, return_counts=True)
         for u, c in zip(unique, counts):
             class_counts[u.int()] += c.float()
-    
-    # Compute inverse frequency weights (more frequent = lower weight)
+
     total_pixels = class_counts.sum()
-    class_weights = total_pixels / (num_classes * class_counts + 1e-6)  # Add small epsilon to avoid division by zero
-    
-    # Normalize weights
+    class_weights = total_pixels / (num_classes * class_counts + 1e-6)
     class_weights = class_weights / class_weights.sum() * num_classes
-    
+
     print(f"Class distribution (sample): {class_counts.tolist()}")
     print(f"Class weights: {class_weights.tolist()}")
-    print("(Higher weight = more focus on that class during training)")
-
-    # Create model with class weights
     model = BladeDefectLightningModule(
         num_classes=num_classes,
         learning_rate=learning_rate,
         class_weights=class_weights,
     )
 
-    # Setup loggers
     loggers = []
-
-    # TensorBoard logger for easy visualization (always enabled)
-    # Logs will be in lightning_logs/version_X/
     tensorboard_logger = TensorBoardLogger(
         save_dir="lightning_logs",
-        name=None,  # No additional lightning_logs/ subfolder
+        name=None,
     )
     loggers.append(tensorboard_logger)
 
-    # MLflow logger (optional - only if server is available)
     mlflow_logger = None
     try:
-        # Check if MLflow server is reachable before creating logger
         if mlflow_tracking_uri.startswith("http"):
             try:
-                # Try to connect to MLflow server with timeout
                 health_url = mlflow_tracking_uri.rstrip("/") + "/health"
                 response = requests.get(health_url, timeout=3)
                 if response.status_code != 200:
@@ -485,23 +412,19 @@ def train_model(
                 print(f"MLflow server not reachable ({e}), using TensorBoard only")
                 mlflow_logger = None
             else:
-                # Server is reachable, ensure experiment exists before creating logger
                 try:
                     mlflow.set_tracking_uri(mlflow_tracking_uri)
-                    # Get or create experiment to avoid race condition
                     try:
                         experiment = mlflow.get_experiment_by_name(experiment_name)
                         if experiment is None:
-                            # Experiment doesn't exist, create it
                             experiment_id = mlflow.create_experiment(experiment_name)
                             print(
                                 f"Created MLflow experiment: {experiment_name} "
                                 f"(ID: {experiment_id})"
                             )
                         elif experiment.lifecycle_stage == "deleted":
-                            # Experiment exists but is deleted
-                            # Try to restore it, if that fails, delete permanently and create new
                             from mlflow.tracking import MlflowClient
+
                             client = MlflowClient(mlflow_tracking_uri)
                             try:
                                 client.restore_experiment(experiment.experiment_id)
@@ -511,25 +434,22 @@ def train_model(
                                     f"{experiment_name} (ID: {experiment_id})"
                                 )
                             except Exception:
-                                # If restore fails, delete permanently and create new
                                 try:
                                     client.delete_experiment(experiment.experiment_id)
                                 except Exception:
-                                    pass  # Ignore if already deleted
+                                    pass
                                 experiment_id = mlflow.create_experiment(experiment_name)
                                 print(
                                     f"Created new MLflow experiment (old was deleted): "
                                     f"{experiment_name} (ID: {experiment_id})"
                                 )
                         else:
-                            # Experiment exists and is active
                             experiment_id = experiment.experiment_id
                             print(
                                 f"Using existing MLflow experiment: "
                                 f"{experiment_name} (ID: {experiment_id})"
                             )
                     except Exception as exp_err:
-                        # If get_experiment_by_name fails, try to create
                         try:
                             experiment_id = mlflow.create_experiment(experiment_name)
                             print(
@@ -541,18 +461,17 @@ def train_model(
                                 f"Failed to get/create experiment: "
                                 f"get={exp_err}, create={create_err}"
                             )
-                    
-                    # Set active experiment to prevent MLFlowLogger from trying to create it
+
                     mlflow.set_experiment(experiment_name)
                     print(f"Set active experiment: {experiment_name}")
-                    
+
                 except Exception as e:
                     print(f"Failed to setup MLflow experiment ({e}), using TensorBoard only")
                     import traceback
+
                     traceback.print_exc()
                     mlflow_logger = None
                 else:
-                    # Create logger - experiment is already set as active
                     try:
                         mlflow_logger = MLFlowLogger(
                             experiment_name=experiment_name,
@@ -564,19 +483,18 @@ def train_model(
                     except Exception as e:
                         print(f"MLflow logger creation failed ({e}), using TensorBoard only")
                         import traceback
+
                         traceback.print_exc()
                         mlflow_logger = None
         else:
-            # File-based tracking, ensure experiment exists
             try:
                 mlflow.set_tracking_uri(mlflow_tracking_uri)
                 experiment = mlflow.get_experiment_by_name(experiment_name)
                 if experiment is None:
                     mlflow.create_experiment(experiment_name)
             except Exception:
-                pass  # Ignore errors for file-based tracking
-            
-            # File-based tracking, try to create logger
+                pass
+
             mlflow_logger = MLFlowLogger(
                 experiment_name=experiment_name,
                 tracking_uri=mlflow_tracking_uri,
@@ -588,8 +506,6 @@ def train_model(
         print(f"MLflow logger initialization failed ({e}), using TensorBoard only")
         mlflow_logger = None
 
-    # Log git commit id to MLflow (if available)
-    # Note: This is done after logger is created, so run_id should be available
     if mlflow_logger is not None and hasattr(mlflow_logger, 'run_id') and mlflow_logger.run_id:
         try:
             result = subprocess.run(
@@ -600,63 +516,50 @@ def train_model(
                 cwd=Path.cwd(),
             )
             git_commit_id = result.stdout.strip() if result.returncode == 0 else "unknown"
-            
-            # Set tracking URI before logging
             mlflow.set_tracking_uri(mlflow_tracking_uri)
             with mlflow.start_run(run_id=mlflow_logger.run_id):
                 mlflow.set_tag("git_commit_id", git_commit_id)
             print(f"Logged git commit id to MLflow: {git_commit_id}")
-        except Exception as e:
-            # Silently ignore errors - this is not critical
+        except Exception:
             pass
 
-    # Callbacks
-    # ModelCheckpoint monitors val_loss - will save best model based on validation loss
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
         mode="min",
         save_top_k=1,
         dirpath="models",
         filename="best-{epoch:02d}-{val_loss:.2f}",
-        save_last=True,  # Also save last checkpoint
-        verbose=True,  # Print checkpoint info
-    )
-    
-    # Early stopping: stop training if validation loss doesn't improve
-    # This prevents overfitting and saves training time
-    early_stop_callback = EarlyStopping(
-        monitor="val_loss",
-        min_delta=0.001,  # Minimum change to qualify as improvement
-        patience=5,  # Number of epochs to wait before stopping
-        mode="min",  # Minimize validation loss
-        verbose=True,  # Print when early stopping is triggered
-        check_finite=True,  # Stop if loss becomes NaN or Inf
+        save_last=True,
+        verbose=True,
     )
 
-    # Trainer with GPU support and memory optimizations
-    # Use gradient accumulation to emulate larger batch size
-    # With batch_size=6 and accumulate_grad_batches=6, effective batch size = 36
-    # Note: Using full precision (32-bit) due to NaN issues with mixed precision
-    # and gradient accumulation. Memory is saved through reduced model size.
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss",
+        min_delta=0.001,
+        patience=5,
+        mode="min",
+        verbose=True,
+        check_finite=True,
+    )
+
     accumulate_grad_batches = 6
     trainer = Trainer(
         max_epochs=num_epochs,
-        min_epochs=1,  # Minimum epochs to train
+        min_epochs=1,
         logger=loggers,
         callbacks=[checkpoint_callback, early_stop_callback],
-        accelerator="gpu",  # Explicitly use GPU
-        devices=1,  # Use single GPU
-        precision="32",  # Full precision (16-mixed causes NaN with gradient accumulation)
-        accumulate_grad_batches=accumulate_grad_batches,  # Accumulate gradients
+        accelerator="gpu",
+        devices=1,
+        precision="32",
+        accumulate_grad_batches=accumulate_grad_batches,
         log_every_n_steps=10,
         enable_progress_bar=True,
-        enable_model_summary=True,  # Show model summary
-        check_val_every_n_epoch=1,  # Validate every epoch
-        val_check_interval=1.0,  # Validate after each training epoch
-        gradient_clip_val=1.0,  # Gradient clipping to prevent NaN
+        enable_model_summary=True,
+        check_val_every_n_epoch=1,
+        val_check_interval=1.0,
+        gradient_clip_val=1.0,
     )
 
-    # Print dataloader info
     print(f"\nDataLoader info:")
     print(f"  Train batches: {len(train_loader)}")
     print(f"  Val batches: {len(val_loader)}")
@@ -664,21 +567,13 @@ def train_model(
     print(f"  Batch size: {batch_size}")
     print(f"  Gradient accumulation: {accumulate_grad_batches}")
     print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
-    print(f"  Precision: 32-bit (full precision for stability)")
-    print(f"  Model: Optimized channels (40->80->160->320->640)")
-    print(f"  Loss: CrossEntropy (training), CrossEntropy+Dice (validation)")
-    print(f"  Augmentation: Color jitter (brightness, contrast, saturation, hue)")
-    print(f"  LR Scheduler: ReduceLROnPlateau (patience=3, factor=0.5)")
-    print(f"  Early Stopping: Enabled (patience=5)")
-    
-    # Warn if dataset is very small
+
     if len(train_loader) < 5:
         print(f"\nWARNING: Training dataset is very small ({len(train_loader)} batches).")
         print("This may cause training to complete very quickly.")
     if len(val_loader) == 0:
         raise ValueError("Validation dataloader is empty! Cannot train without validation data.")
-    
-    # Train + validation
+
     print(f"\nStarting training for {num_epochs} epochs...")
     print(
         f"Expected training time: "
@@ -714,8 +609,6 @@ def train_model(
             f"max_epochs={trainer.max_epochs}"
         )
 
-    # Test on test set (always run test, even if training stopped early)
-    # This helps with debugging and we still get test metrics
     print(f"\nRunning test evaluation...")
     print(f"Training completed {trainer.current_epoch + 1} out of {num_epochs} epochs")
     print("\n" + "=" * 50)
@@ -731,20 +624,16 @@ def train_model(
         traceback.print_exc()
         test_results = None
     
-    # Print test results
     if test_results:
         print("\nTest Results:")
         for key, value in test_results[0].items():
             if isinstance(value, (int, float)):
                 print(f"  {key}: {value:.4f}")
 
-    # Log test metrics explicitly to MLflow (if available)
-    # Wrap in try-except to prevent errors from stopping the function
     print(f"\nLogging metrics to MLflow...")
     if mlflow_logger is not None:
         print(f"MLflow logger available, run_id: {mlflow_logger.run_id}")
         try:
-            # Log all callback metrics (includes test metrics after test())
             log_metrics_to_mlflow(
                 mlflow_logger.experiment,
                 mlflow_logger.run_id,
@@ -754,11 +643,10 @@ def train_model(
         except Exception as e:
             print(f"⚠ WARNING: Failed to log callback metrics to MLflow: {e}")
             import traceback
+
             traceback.print_exc()
-            # Continue - don't let MLflow errors stop the process
-        
+
         try:
-            # Also explicitly log test results if available
             if test_results:
                 print("Logging test results to MLflow...")
                 with mlflow.start_run(run_id=mlflow_logger.run_id):
@@ -769,8 +657,8 @@ def train_model(
         except Exception as e:
             print(f"⚠ WARNING: Failed to log test metrics to MLflow: {e}")
             import traceback
+
             traceback.print_exc()
-            # Continue - don't let MLflow errors stop the process
     else:
         print("MLflow logger not available, skipping MLflow logging")
 
