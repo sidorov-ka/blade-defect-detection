@@ -55,7 +55,7 @@ def _pull_dvc_data(data_path: Path) -> None:
                         key, value = line.split("=", 1)
                         if key.startswith("AWS_"):
                             env[key] = value
-
+        
         # Pull specific data path from DVC
         result = subprocess.run(
             ["dvc", "pull", str(data_path)],
