@@ -46,34 +46,35 @@ class UNet(nn.Module):
         super().__init__()
         self.num_classes = num_classes
 
-        # Encoder (downsampling) - Optimized for memory efficiency
-        # Reduced channels: 48->96->192->384->768 (vs original 64->128->256->512->1024)
-        # This reduces parameters by ~1.5x while maintaining good performance
-        self.enc1 = DoubleConv(in_channels, 48)
-        self.enc2 = DoubleConv(48, 96)
-        self.enc3 = DoubleConv(96, 192)
-        self.enc4 = DoubleConv(192, 384)
+        # Encoder (downsampling) - Further optimized for memory efficiency
+        # Reduced channels: 40->80->160->320->640 (vs original 64->128->256->512->1024)
+        # This reduces parameters by ~2x while maintaining good performance
+        # Slightly smaller to compensate for Dice Loss computation on validation
+        self.enc1 = DoubleConv(in_channels, 40)
+        self.enc2 = DoubleConv(40, 80)
+        self.enc3 = DoubleConv(80, 160)
+        self.enc4 = DoubleConv(160, 320)
 
         self.pool = nn.MaxPool2d(2)
 
         # Bottleneck
-        self.bottleneck = DoubleConv(384, 768)
+        self.bottleneck = DoubleConv(320, 640)
 
         # Decoder (upsampling)
-        self.up4 = nn.ConvTranspose2d(768, 384, kernel_size=2, stride=2)
-        self.dec4 = DoubleConv(768, 384)
+        self.up4 = nn.ConvTranspose2d(640, 320, kernel_size=2, stride=2)
+        self.dec4 = DoubleConv(640, 320)
 
-        self.up3 = nn.ConvTranspose2d(384, 192, kernel_size=2, stride=2)
-        self.dec3 = DoubleConv(384, 192)
+        self.up3 = nn.ConvTranspose2d(320, 160, kernel_size=2, stride=2)
+        self.dec3 = DoubleConv(320, 160)
 
-        self.up2 = nn.ConvTranspose2d(192, 96, kernel_size=2, stride=2)
-        self.dec2 = DoubleConv(192, 96)
+        self.up2 = nn.ConvTranspose2d(160, 80, kernel_size=2, stride=2)
+        self.dec2 = DoubleConv(160, 80)
 
-        self.up1 = nn.ConvTranspose2d(96, 48, kernel_size=2, stride=2)
-        self.dec1 = DoubleConv(96, 48)
+        self.up1 = nn.ConvTranspose2d(80, 40, kernel_size=2, stride=2)
+        self.dec1 = DoubleConv(80, 40)
 
         # Final output layer
-        self.final = nn.Conv2d(48, num_classes, kernel_size=1)
+        self.final = nn.Conv2d(40, num_classes, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.

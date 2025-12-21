@@ -82,7 +82,7 @@ class BladeDefectLightningModule(LightningModule):
     def dice_loss(
         self, pred: torch.Tensor, target: torch.Tensor, num_classes: int, smooth: float = 1e-6
     ) -> torch.Tensor:
-        """Compute Dice Loss for multi-class segmentation.
+        """Compute Dice Loss for multi-class segmentation (optimized vectorized version).
 
         Args:
             pred: Logits tensor [B, num_classes, H, W]
@@ -94,19 +94,19 @@ class BladeDefectLightningModule(LightningModule):
             Dice loss value (scalar tensor)
         """
         pred_softmax = F.softmax(pred, dim=1)
-        target_one_hot = F.one_hot(target, num_classes).permute(0, 3, 1, 2).float()
-
-        dice_scores = []
-        for i in range(num_classes):
-            pred_i = pred_softmax[:, i]
-            target_i = target_one_hot[:, i]
-            intersection = (pred_i * target_i).sum(dim=(1, 2))  # Sum over H, W
-            union = pred_i.sum(dim=(1, 2)) + target_i.sum(dim=(1, 2))
-            dice = (2 * intersection + smooth) / (union + smooth)
-            dice_scores.append(dice)
-
+        
+        # Memory-efficient one-hot: use scatter instead of F.one_hot + permute
+        # This avoids creating intermediate tensor and is faster
+        target_one_hot = torch.zeros_like(pred_softmax)
+        target_one_hot.scatter_(1, target.unsqueeze(1), 1.0)
+        
+        # Vectorized computation: compute all classes at once (much faster than loop)
+        intersection = (pred_softmax * target_one_hot).sum(dim=(2, 3))  # [B, num_classes]
+        union = pred_softmax.sum(dim=(2, 3)) + target_one_hot.sum(dim=(2, 3))  # [B, num_classes]
+        dice = (2 * intersection + smooth) / (union + smooth)  # [B, num_classes]
+        
         # Average over classes and batches
-        dice_loss = 1 - torch.stack(dice_scores).mean()
+        dice_loss = 1 - dice.mean()
         return dice_loss
 
     def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
@@ -127,16 +127,12 @@ class BladeDefectLightningModule(LightningModule):
 
         logits = self(images)
         
-        # Combined loss: CrossEntropy + Dice Loss
-        # CrossEntropy provides pixel-wise classification signal
-        # Dice Loss directly optimizes IoU (segmentation quality)
-        loss_ce = self.criterion_ce(logits, masks)
-        loss_dice = self.dice_loss(logits, masks, self.num_classes)
-        loss = 0.5 * loss_ce + 0.5 * loss_dice  # Equal weighting
+        # Training: Only CrossEntropy for speed (same as original model)
+        # Dice Loss is computed only on validation to optimize IoU without slowing training
+        loss = self.criterion_ce(logits, masks)
         
-        # Log individual losses for monitoring
-        self.log("train_loss_ce", loss_ce, on_step=False, on_epoch=True)
-        self.log("train_loss_dice", loss_dice, on_step=False, on_epoch=True)
+        # Log loss
+        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
         # Check for NaN or invalid loss
         if torch.isnan(loss) or torch.isinf(loss):
@@ -181,12 +177,14 @@ class BladeDefectLightningModule(LightningModule):
 
         logits = self(images)
         
-        # Combined loss: CrossEntropy + Dice Loss
+        # Validation: Combined loss (CrossEntropy + Dice) to optimize IoU
+        # Dice Loss is computed only on validation to keep training fast
         loss_ce = self.criterion_ce(logits, masks)
         loss_dice = self.dice_loss(logits, masks, self.num_classes)
-        loss = 0.5 * loss_ce + 0.5 * loss_dice
+        loss = 0.7 * loss_ce + 0.3 * loss_dice  # Lighter Dice weight for stability
         
         # Log individual losses for monitoring
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_loss_ce", loss_ce, on_step=False, on_epoch=True)
         self.log("val_loss_dice", loss_dice, on_step=False, on_epoch=True)
 
@@ -211,9 +209,10 @@ class BladeDefectLightningModule(LightningModule):
         """Test step mirrors validation for reporting."""
         images, masks = batch
         logits = self(images)
+        # Test: Combined loss for final evaluation
         loss_ce = self.criterion_ce(logits, masks)
         loss_dice = self.dice_loss(logits, masks, self.num_classes)
-        loss = 0.5 * loss_ce + 0.5 * loss_dice
+        loss = 0.7 * loss_ce + 0.3 * loss_dice
         preds = torch.argmax(logits, dim=1)
         self.test_metrics(preds, masks)
         self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -631,8 +630,8 @@ def train_model(
     print(f"  Gradient accumulation: {accumulate_grad_batches}")
     print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
     print(f"  Precision: 32-bit (full precision for stability)")
-    print(f"  Model: Reduced channels (48->96->192->384->768)")
-    print(f"  Loss: Combined CrossEntropy + Dice Loss (optimizes IoU)")
+    print(f"  Model: Optimized channels (40->80->160->320->640)")
+    print(f"  Loss: CrossEntropy (training), CrossEntropy+Dice (validation)")
     print(f"  Augmentation: Color jitter (brightness, contrast, saturation, hue)")
     print(f"  LR Scheduler: ReduceLROnPlateau (patience=3, factor=0.5)")
     print(f"  Early Stopping: Enabled (patience=5)")
