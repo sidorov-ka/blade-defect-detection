@@ -47,8 +47,10 @@ class BladeDefectLightningModule(LightningModule):
         # Model
         self.model = BladeDefectModel(num_classes=num_classes)
 
-        # Loss function (CrossEntropy for multi-class segmentation)
-        self.criterion = nn.CrossEntropyLoss()
+        # Loss functions
+        # CrossEntropy for pixel-wise classification
+        self.criterion_ce = nn.CrossEntropyLoss()
+        # Dice Loss for better IoU optimization (directly optimizes segmentation quality)
 
         # Metrics
         self.train_metrics = MetricCollection(
@@ -124,7 +126,17 @@ class BladeDefectLightningModule(LightningModule):
             masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
-        loss = self.criterion(logits, masks)
+        
+        # Combined loss: CrossEntropy + Dice Loss
+        # CrossEntropy provides pixel-wise classification signal
+        # Dice Loss directly optimizes IoU (segmentation quality)
+        loss_ce = self.criterion_ce(logits, masks)
+        loss_dice = self.dice_loss(logits, masks, self.num_classes)
+        loss = 0.5 * loss_ce + 0.5 * loss_dice  # Equal weighting
+        
+        # Log individual losses for monitoring
+        self.log("train_loss_ce", loss_ce, on_step=False, on_epoch=True)
+        self.log("train_loss_dice", loss_dice, on_step=False, on_epoch=True)
 
         # Check for NaN or invalid loss
         if torch.isnan(loss) or torch.isinf(loss):
@@ -223,7 +235,6 @@ class BladeDefectLightningModule(LightningModule):
             mode="min",  # Minimize validation loss
             factor=0.5,  # Reduce LR by half
             patience=3,  # Wait 3 epochs without improvement
-            verbose=True,  # Print when LR is reduced
             min_lr=1e-6,  # Minimum learning rate
         )
         
