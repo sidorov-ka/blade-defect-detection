@@ -29,6 +29,7 @@ class BladeDefectLightningModule(LightningModule):
         num_classes: int = 5,
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-5,
+        class_weights: Optional[torch.Tensor] = None,
     ):
         """Initialize Lightning module.
 
@@ -36,6 +37,7 @@ class BladeDefectLightningModule(LightningModule):
             num_classes: Number of classes (background + defects)
             learning_rate: Learning rate
             weight_decay: Weight decay for optimizer
+            class_weights: Optional class weights for imbalanced data
         """
         super().__init__()
         self.save_hyperparameters()
@@ -48,8 +50,14 @@ class BladeDefectLightningModule(LightningModule):
         self.model = BladeDefectModel(num_classes=num_classes)
 
         # Loss functions
-        # CrossEntropy for pixel-wise classification
-        self.criterion_ce = nn.CrossEntropyLoss()
+        # CrossEntropy with class weights for imbalanced data
+        # Class weights help focus on minority classes (defects)
+        if class_weights is not None:
+            # Store weights to move to device later
+            self.register_buffer("class_weights", class_weights)
+            self.criterion_ce = nn.CrossEntropyLoss(weight=self.class_weights)
+        else:
+            self.criterion_ce = nn.CrossEntropyLoss()
         # Dice Loss for better IoU optimization (directly optimizes segmentation quality)
 
         # Metrics
@@ -181,10 +189,9 @@ class BladeDefectLightningModule(LightningModule):
         # Dice Loss is computed only on validation to keep training fast
         loss_ce = self.criterion_ce(logits, masks)
         loss_dice = self.dice_loss(logits, masks, self.num_classes)
-        loss = 0.7 * loss_ce + 0.3 * loss_dice  # Lighter Dice weight for stability
+        loss = 0.5 * loss_ce + 0.5 * loss_dice  # Increased Dice weight to optimize IoU
         
         # Log individual losses for monitoring
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_loss_ce", loss_ce, on_step=False, on_epoch=True)
         self.log("val_loss_dice", loss_dice, on_step=False, on_epoch=True)
 
@@ -199,7 +206,7 @@ class BladeDefectLightningModule(LightningModule):
         # Update metrics
         self.val_metrics(preds, masks)
 
-        # Log
+        # Log combined loss and metrics
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log_dict(self.val_metrics, on_step=False, on_epoch=True)
 
@@ -418,10 +425,38 @@ def train_model(
     else:
         num_classes = train_dataset.num_classes
 
-    # Create model
+    # Compute class weights for imbalanced data
+    # This helps the model focus on minority classes (defects) instead of just background
+    print("\nComputing class weights from training data...")
+    class_counts = torch.zeros(num_classes, dtype=torch.float32)
+    
+    # Sample a subset of training data to compute class distribution
+    # (computing on full dataset would be too slow)
+    sample_size = min(1000, len(train_dataset))
+    sample_indices = torch.randperm(len(train_dataset))[:sample_size]
+    
+    for idx in sample_indices:
+        _, mask = train_dataset[idx]
+        unique, counts = torch.unique(mask, return_counts=True)
+        for u, c in zip(unique, counts):
+            class_counts[u.int()] += c.float()
+    
+    # Compute inverse frequency weights (more frequent = lower weight)
+    total_pixels = class_counts.sum()
+    class_weights = total_pixels / (num_classes * class_counts + 1e-6)  # Add small epsilon to avoid division by zero
+    
+    # Normalize weights
+    class_weights = class_weights / class_weights.sum() * num_classes
+    
+    print(f"Class distribution (sample): {class_counts.tolist()}")
+    print(f"Class weights: {class_weights.tolist()}")
+    print("(Higher weight = more focus on that class during training)")
+
+    # Create model with class weights
     model = BladeDefectLightningModule(
         num_classes=num_classes,
         learning_rate=learning_rate,
+        class_weights=class_weights,
     )
 
     # Setup loggers
@@ -598,31 +633,19 @@ def train_model(
         check_finite=True,  # Stop if loss becomes NaN or Inf
     )
 
-    # Trainer with automatic device selection (GPU if available, else CPU)
+    # Trainer with GPU support and memory optimizations
     # Use gradient accumulation to emulate larger batch size
     # With batch_size=6 and accumulate_grad_batches=6, effective batch size = 36
     # Note: Using full precision (32-bit) due to NaN issues with mixed precision
     # and gradient accumulation. Memory is saved through reduced model size.
     accumulate_grad_batches = 6
-    
-    # Auto-detect available device (GPU if available, else CPU)
-    import torch
-    if torch.cuda.is_available():
-        accelerator = "gpu"
-        devices = 1
-        print("GPU available: Using GPU for training")
-    else:
-        accelerator = "cpu"
-        devices = "auto"
-        print("GPU not available: Using CPU for training (will be slower)")
-    
     trainer = Trainer(
         max_epochs=num_epochs,
         min_epochs=1,  # Minimum epochs to train
         logger=loggers,
         callbacks=[checkpoint_callback, early_stop_callback],
-        accelerator=accelerator,  # Auto-detect: GPU if available, else CPU
-        devices=devices,  # Use single GPU if available, else CPU
+        accelerator="gpu",  # Explicitly use GPU
+        devices=1,  # Use single GPU
         precision="32",  # Full precision (16-mixed causes NaN with gradient accumulation)
         accumulate_grad_batches=accumulate_grad_batches,  # Accumulate gradients
         log_every_n_steps=10,
