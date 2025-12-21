@@ -598,19 +598,31 @@ def train_model(
         check_finite=True,  # Stop if loss becomes NaN or Inf
     )
 
-    # Trainer with GPU support and memory optimizations
+    # Trainer with automatic device selection (GPU if available, else CPU)
     # Use gradient accumulation to emulate larger batch size
     # With batch_size=6 and accumulate_grad_batches=6, effective batch size = 36
     # Note: Using full precision (32-bit) due to NaN issues with mixed precision
     # and gradient accumulation. Memory is saved through reduced model size.
     accumulate_grad_batches = 6
+    
+    # Auto-detect available device (GPU if available, else CPU)
+    import torch
+    if torch.cuda.is_available():
+        accelerator = "gpu"
+        devices = 1
+        print("GPU available: Using GPU for training")
+    else:
+        accelerator = "cpu"
+        devices = "auto"
+        print("GPU not available: Using CPU for training (will be slower)")
+    
     trainer = Trainer(
         max_epochs=num_epochs,
         min_epochs=1,  # Minimum epochs to train
         logger=loggers,
         callbacks=[checkpoint_callback, early_stop_callback],
-        accelerator="gpu",  # Explicitly use GPU
-        devices=1,  # Use single GPU
+        accelerator=accelerator,  # Auto-detect: GPU if available, else CPU
+        devices=devices,  # Use single GPU if available, else CPU
         precision="32",  # Full precision (16-mixed causes NaN with gradient accumulation)
         accumulate_grad_batches=accumulate_grad_batches,  # Accumulate gradients
         log_every_n_steps=10,
