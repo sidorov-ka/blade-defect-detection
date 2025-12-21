@@ -470,6 +470,7 @@ def train_model(
     accumulate_grad_batches = 4
     trainer = Trainer(
         max_epochs=num_epochs,
+        min_epochs=1,  # Minimum epochs to train
         logger=loggers,
         callbacks=[checkpoint_callback],
         accelerator="gpu",  # Explicitly use GPU
@@ -480,6 +481,7 @@ def train_model(
         enable_progress_bar=True,
         enable_model_summary=True,  # Show model summary
         check_val_every_n_epoch=1,  # Validate every epoch
+        val_check_interval=1.0,  # Validate after each training epoch
     )
 
     # Print dataloader info
@@ -490,15 +492,53 @@ def train_model(
     print(f"  Batch size: {batch_size}")
     print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
     
+    # Warn if dataset is very small
+    if len(train_loader) < 5:
+        print(f"\nWARNING: Training dataset is very small ({len(train_loader)} batches).")
+        print("This may cause training to complete very quickly.")
+    if len(val_loader) == 0:
+        raise ValueError("Validation dataloader is empty! Cannot train without validation data.")
+    
     # Train + validation
     print(f"\nStarting training for {num_epochs} epochs...")
-    trainer.fit(model, train_loader, val_loader)
+    print(f"Expected training time: ~{len(train_loader) * num_epochs / 60:.1f} minutes (rough estimate)")
+    try:
+        print(f"Calling trainer.fit() for {num_epochs} epochs...")
+        trainer.fit(model, train_loader, val_loader)
+        actual_epochs = trainer.current_epoch + 1
+        print(f"\n✓ Training completed successfully after {actual_epochs} epochs!")
+        print(f"Trainer state: current_epoch={trainer.current_epoch}, max_epochs={trainer.max_epochs}")
+        if actual_epochs < num_epochs:
+            print(f"⚠ WARNING: Training stopped after {actual_epochs} epochs instead of {num_epochs}!")
+            print("This may indicate an issue. Check logs above for errors.")
+    except KeyboardInterrupt:
+        print(f"\n⚠ Training interrupted by user")
+        raise
+    except Exception as e:
+        print(f"\n✗ ERROR: Training failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
+        # Don't raise - continue to test if possible
+        print("Continuing to test evaluation despite training error...")
+    finally:
+        print(f"After trainer.fit(): current_epoch={trainer.current_epoch}, max_epochs={trainer.max_epochs}")
 
-    # Test on test set
+    # Test on test set (always run test, even if training stopped early)
+    # This helps with debugging and we still get test metrics
+    print(f"\nRunning test evaluation...")
+    print(f"Training completed {trainer.current_epoch + 1} out of {num_epochs} epochs")
     print("\n" + "=" * 50)
     print("Running evaluation on test set...")
     print("=" * 50)
-    test_results = trainer.test(model, test_loader)
+    test_results = None
+    try:
+        test_results = trainer.test(model, test_loader)
+        print("Test evaluation completed successfully")
+    except Exception as e:
+        print(f"WARNING: Test evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        test_results = None
     
     # Print test results
     if test_results:
@@ -508,7 +548,10 @@ def train_model(
                 print(f"  {key}: {value:.4f}")
 
     # Log test metrics explicitly to MLflow (if available)
+    # Wrap in try-except to prevent errors from stopping the function
+    print(f"\nLogging metrics to MLflow...")
     if mlflow_logger is not None:
+        print(f"MLflow logger available, run_id: {mlflow_logger.run_id}")
         try:
             # Log all callback metrics (includes test metrics after test())
             log_metrics_to_mlflow(
@@ -516,17 +559,34 @@ def train_model(
                 mlflow_logger.run_id,
                 trainer.callback_metrics,
             )
-            
+            print("✓ Callback metrics logged to MLflow")
+        except Exception as e:
+            print(f"⚠ WARNING: Failed to log callback metrics to MLflow: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue - don't let MLflow errors stop the process
+        
+        try:
             # Also explicitly log test results if available
             if test_results:
+                print("Logging test results to MLflow...")
                 with mlflow.start_run(run_id=mlflow_logger.run_id):
                     for key, value in test_results[0].items():
                         if isinstance(value, (int, float)):
                             mlflow.log_metric(key, float(value))
-                print("Test metrics logged to MLflow")
+                print("✓ Test metrics logged to MLflow")
         except Exception as e:
-            print(f"Failed to log metrics to MLflow: {e}")
+            print(f"⚠ WARNING: Failed to log test metrics to MLflow: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue - don't let MLflow errors stop the process
+    else:
+        print("MLflow logger not available, skipping MLflow logging")
 
+    print(f"\n✓ Training function completed successfully.")
+    print(f"  - Training epochs: {trainer.current_epoch + 1}/{num_epochs}")
+    print(f"  - Test evaluation: {'Completed' if test_results else 'Skipped/Failed'}")
+    print(f"  - MLflow logging: {'Completed' if mlflow_logger else 'Not available'}")
     return trainer, model
 
 

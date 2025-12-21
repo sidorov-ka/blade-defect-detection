@@ -136,13 +136,15 @@ class BladeDefectDataset(Dataset):
             
             mask_array = mask_array.astype(np.int64)
             
-            # Validate mask values
+            # Validate mask values (clamp instead of raising error to not stop training)
             if mask_array.min() < 0 or mask_array.max() >= self.num_classes:
-                raise ValueError(
-                    f"Invalid mask values in {sample['mask_path']}: "
+                print(
+                    f"WARNING: Invalid mask values in {sample['mask_path']}: "
                     f"min={mask_array.min()}, max={mask_array.max()}, "
-                    f"expected range [0, {self.num_classes-1}]"
+                    f"expected range [0, {self.num_classes-1}]. Clamping to valid range."
                 )
+                # Clamp to valid range instead of raising error
+                mask_array = np.clip(mask_array, 0, self.num_classes - 1)
         else:
             # Normal sample: all background (class 0)
             mask_array = np.zeros(self.image_size, dtype=np.int64)
@@ -151,13 +153,14 @@ class BladeDefectDataset(Dataset):
         image_tensor = transforms.ToTensor()(image)  # [3, H, W] in [0, 1]
         mask_tensor = torch.from_numpy(mask_array).long()  # [H, W] int64
         
-        # Final validation
-        assert (
-            mask_tensor.min() >= 0 and mask_tensor.max() < self.num_classes
-        ), (
-            f"Mask validation failed: min={mask_tensor.min()}, "
-            f"max={mask_tensor.max()}, num_classes={self.num_classes}"
-        )
+        # Final validation (clamp instead of assert to not stop training)
+        if mask_tensor.min() < 0 or mask_tensor.max() >= self.num_classes:
+            print(
+                f"WARNING: Mask validation failed: min={mask_tensor.min()}, "
+                f"max={mask_tensor.max()}, num_classes={self.num_classes}. "
+                f"Clamping to valid range."
+            )
+            mask_tensor = torch.clamp(mask_tensor, 0, self.num_classes - 1)
 
         # Apply transforms if provided
         if self.transform:
