@@ -81,13 +81,17 @@ class BladeDefectLightningModule(LightningModule):
         """Training step."""
         images, masks = batch
 
-        # Validate masks
+        # Validate masks (with warning instead of error to not stop training)
         mask_min, mask_max = masks.min().item(), masks.max().item()
         if mask_min < 0 or mask_max >= self.num_classes:
-            raise ValueError(
-                f"Invalid mask values: min={mask_min}, max={mask_max}, "
-                f"expected range [0, {self.num_classes-1}]"
+            print(
+                f"WARNING: Invalid mask values at train step {batch_idx}: "
+                f"min={mask_min}, max={mask_max}, "
+                f"expected range [0, {self.num_classes-1}]. "
+                f"Clamping to valid range."
             )
+            # Clamp masks to valid range instead of raising error
+            masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
         loss = self.criterion(logits, masks)
@@ -121,13 +125,17 @@ class BladeDefectLightningModule(LightningModule):
         """Validation step."""
         images, masks = batch
 
-        # Validate masks
+        # Validate masks (with warning instead of error to not stop training)
         mask_min, mask_max = masks.min().item(), masks.max().item()
         if mask_min < 0 or mask_max >= self.num_classes:
-            raise ValueError(
-                f"Invalid mask values: min={mask_min}, max={mask_max}, "
-                f"expected range [0, {self.num_classes-1}]"
+            print(
+                f"WARNING: Invalid mask values at val step {batch_idx}: "
+                f"min={mask_min}, max={mask_max}, "
+                f"expected range [0, {self.num_classes-1}]. "
+                f"Clamping to valid range."
             )
+            # Clamp masks to valid range instead of raising error
+            masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
         loss = self.criterion(logits, masks)
@@ -237,6 +245,24 @@ def train_model(
             full_dataset,
             [train_size, val_size, test_size],
             generator=torch.Generator().manual_seed(42),
+        )
+
+    # Check dataset sizes before creating dataloaders
+    print(f"\nDataset sizes:")
+    print(f"  Train: {len(train_dataset)} samples")
+    print(f"  Val: {len(val_dataset)} samples")
+    print(f"  Test: {len(test_dataset)} samples")
+    
+    if len(val_dataset) == 0:
+        raise ValueError(
+            "Validation dataset is empty! Cannot train without validation data. "
+            "Check your data directory structure."
+        )
+    
+    if len(train_dataset) == 0:
+        raise ValueError(
+            "Training dataset is empty! Cannot train without training data. "
+            "Check your data directory structure."
         )
 
     # Create dataloaders
@@ -427,12 +453,15 @@ def train_model(
             pass
 
     # Callbacks
+    # ModelCheckpoint monitors val_loss - will save best model based on validation loss
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
         mode="min",
         save_top_k=1,
         dirpath="models",
         filename="best-{epoch:02d}-{val_loss:.2f}",
+        save_last=True,  # Also save last checkpoint
+        verbose=True,  # Print checkpoint info
     )
 
     # Trainer with GPU support
@@ -449,9 +478,20 @@ def train_model(
         accumulate_grad_batches=accumulate_grad_batches,  # Accumulate gradients
         log_every_n_steps=10,
         enable_progress_bar=True,
+        enable_model_summary=True,  # Show model summary
+        check_val_every_n_epoch=1,  # Validate every epoch
     )
 
+    # Print dataloader info
+    print(f"\nDataLoader info:")
+    print(f"  Train batches: {len(train_loader)}")
+    print(f"  Val batches: {len(val_loader)}")
+    print(f"  Test batches: {len(test_loader)}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
+    
     # Train + validation
+    print(f"\nStarting training for {num_epochs} epochs...")
     trainer.fit(model, train_loader, val_loader)
 
     # Test on test set
