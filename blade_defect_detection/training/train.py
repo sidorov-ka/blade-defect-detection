@@ -266,6 +266,18 @@ def train_model(
     """
     data_dir = Path(data_dir)
 
+    # Data augmentation for training (only for train dataset)
+    # Note: For segmentation, we need to apply same transforms to image and mask
+    # Color augmentation only affects images, geometric transforms affect both
+    train_transform = transforms.Compose([
+        transforms.ColorJitter(
+            brightness=0.2,  # Random brightness adjustment
+            contrast=0.2,  # Random contrast adjustment
+            saturation=0.2,  # Random saturation adjustment
+            hue=0.1,  # Random hue adjustment
+        ),
+    ])
+
     # Check if data is split into train/val/test or needs automatic splitting
     train_dir = data_dir / "train"
     val_dir = data_dir / "val"
@@ -273,8 +285,12 @@ def train_model(
 
     if train_dir.exists() and val_dir.exists() and test_dir.exists():
         # Use separate train/val/test directories
+        # Apply augmentation only to training dataset
         train_dataset = BladeDefectDataset(
-            train_dir, image_size=image_size, defect_classes=defect_classes
+            train_dir,
+            image_size=image_size,
+            defect_classes=defect_classes,
+            transform=train_transform,  # Apply augmentation to train
         )
         val_dataset = BladeDefectDataset(
             val_dir, image_size=image_size, defect_classes=defect_classes
