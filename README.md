@@ -64,7 +64,7 @@ Each block uses double convolutions (Conv2d + BatchNorm + ReLU) for feature extr
 ### Key Technologies
 
 - **PyTorch Lightning** - Training framework with automatic GPU support and checkpointing
-- **DVC** - Data version control with Yandex Object Storage (S3-compatible) for 27GB dataset
+- **DVC** - Data version control with Yandex Object Storage (public HTTP access) for 27GB dataset
 - **Hydra** - Hierarchical configuration management for hyperparameters
 - **MLflow** - Experiment tracking with metrics, hyperparameters, and git commit logging
 - **Ruff** - Fast Python linter and formatter (replaces black, isort, flake8)
@@ -86,7 +86,6 @@ Each block uses double convolutions (Conv2d + BatchNorm + ReLU) for feature extr
 - Python 3.9+
 - [uv](https://github.com/astral-sh/uv) for dependency management
 - CUDA-capable GPU (recommended for training)
-- Yandex.Cloud account with Object Storage bucket (for DVC)
 
 ### Installation
 
@@ -143,31 +142,27 @@ uv run pre-commit run -a
 cp env.example .env
 ```
 
-2. **Configure S3 credentials** for DVC in `.env`:
+2. **Configure environment variables** (optional) in `.env`:
 ```env
-# Yandex Object Storage (S3-compatible) credentials for DVC
-AWS_ACCESS_KEY_ID=your_access_key_id
-AWS_SECRET_ACCESS_KEY=your_secret_access_key
-
 # MLflow Configuration (optional)
+# MLflow server should be running on this URI for experiment tracking
 MLFLOW_TRACKING_URI=http://127.0.0.1:8080
 
 # Data Directory (optional, defaults to 'data')
 DATA_DIR=data
 ```
 
-**Note**: `.env` is already in `.gitignore` - your credentials won't be committed.
+**Note**: 
+- `.env` is already in `.gitignore`
+- DVC uses public bucket access, no credentials needed for pulling data
 
 ### DVC Setup
 
-Data is managed by DVC and stored in Yandex Object Storage. The DVC remote is already configured.
+Data is managed by DVC and stored in Yandex Object Storage (public bucket). The DVC remote is already configured for public HTTP access - no credentials needed.
 
 **First time setup** (if data is not available locally):
 ```bash
-# Load environment variables
-export $(cat .env | grep AWS | xargs)
-
-# Pull data from cloud storage
+# Pull data from cloud storage (public access, no credentials needed)
 uv run dvc pull
 ```
 
@@ -406,7 +401,7 @@ blade-defect-detection/
 
 **Pull data from cloud** (if not available locally):
 ```bash
-export $(cat .env | grep AWS | xargs)
+# Public bucket access, no credentials needed
 uv run dvc pull
 ```
 
@@ -537,8 +532,8 @@ uv run pytest
 
 ### DVC Issues
 
-**Problem**: `dvc pull` fails with authentication error
-**Solution**: Check `.env` file has correct `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+**Problem**: `dvc pull` fails
+**Solution**: Check internet connection. The bucket is public and doesn't require credentials.
 
 **Problem**: Data not found locally
 **Solution**: Run `uv run dvc pull` or data will be automatically pulled when running `train`
