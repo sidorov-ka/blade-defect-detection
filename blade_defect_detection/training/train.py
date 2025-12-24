@@ -178,10 +178,9 @@ class BladeDefectLightningModule(LightningModule):
         """Test step mirrors validation for reporting."""
         images, masks = batch
         logits = self(images)
-        # Test: Combined loss for final evaluation
         loss_ce = self.criterion_ce(logits, masks)
         loss_dice = self.dice_loss(logits, masks, self.num_classes)
-        loss = 0.7 * loss_ce + 0.3 * loss_dice
+        loss = 0.5 * loss_ce + 0.5 * loss_dice
         preds = torch.argmax(logits, dim=1)
         self.test_metrics(preds, masks)
         self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
