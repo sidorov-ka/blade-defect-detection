@@ -45,7 +45,8 @@ Manual inspection of turbine blades is time-consuming, subjective, and prone to 
 ### Technical Approach
 
 The solution uses a **UNet architecture** for semantic segmentation, which:
-- Takes RGB images of blades as input (256×256 pixels by default)
+- Takes RGB images of blades as input (configurable size, default: 192×192 pixels)
+- Original dataset images are 1024×1024 pixels (from BladeSynth paper)
 - Outputs pixel-level class predictions (background + 4 defect types)
 - Provides precise spatial localization of defects
 - Handles multi-class segmentation with skip connections for detail preservation
@@ -53,8 +54,8 @@ The solution uses a **UNet architecture** for semantic segmentation, which:
 ### Model Architecture
 
 The model implements a **UNet** architecture with:
-- **Encoder**: 4 downsampling blocks (64→128→256→512 channels) with MaxPooling
-- **Bottleneck**: 1024-channel bottleneck layer
+- **Encoder**: 4 downsampling blocks (40→80→160→320 channels) with MaxPooling
+- **Bottleneck**: 640-channel bottleneck layer
 - **Decoder**: 4 upsampling blocks with skip connections from encoder
 - **Output**: 5-class segmentation map (background + 4 defect types)
 
@@ -196,13 +197,19 @@ data/
 - Images and masks should have matching filenames
 - Normal images don't require masks (all background)
 - Masks should be binary (0=background, 255=defect) or normalized (0-1)
+- Some files in the original dataset may have prefixes like `valid_` in their names (from pre-split validation sets)
 
-The dataset can also be pre-split into train/val/test directories. If `data/train/`, `data/val/`, and `data/test/` exist, they will be used directly. Otherwise, the code automatically splits the dataset 70/15/15.
+**Dataset Splitting**:
+- If `data/train/`, `data/val/`, and `data/test/` directories exist, they will be used directly
+- Otherwise, the code automatically splits the dataset 70/15/15 (train/val/test) using a fixed random seed (42)
+- When using automatic splitting, files with prefixes (like `valid_`) may appear in any split, but their original names are preserved
 
 ### Dataset Statistics
 
 - **Total size**: ~27 GB
 - **Total files**: ~45,000 images
+- **Original image resolution**: 1024×1024 pixels (from BladeSynth paper)
+- **Training image size**: Configurable via `configs/data/dataset.yaml` (default: 192×192)
 - **Classes**: 4 defect types + background
 - **Format**: PNG images with corresponding mask files
 - **Storage**: Yandex Object Storage (S3-compatible) via DVC
@@ -254,7 +261,9 @@ uv run python commands.py train --data_dir=/path/to/data
 - **MLflow experiments**: `blade-defect-detection` experiment with all runs
 
 **Logged metrics**:
-- `train_loss`, `val_loss`, `test_loss` - CrossEntropy loss
+- `train_loss` - CrossEntropy loss (training only)
+- `val_loss`, `val_loss_ce`, `val_loss_dice` - Combined loss (0.5 * CrossEntropy + 0.5 * Dice) and components
+- `test_loss` - Combined loss (0.5 * CrossEntropy + 0.5 * Dice)
 - `train_iou`, `val_iou`, `test_iou` - Jaccard Index (IoU) for segmentation quality
 - Hyperparameters: learning_rate, batch_size, num_epochs, image_size, etc.
 - Git commit ID as tag for reproducibility
@@ -321,10 +330,10 @@ All hyperparameters and settings are managed through **Hydra** hierarchical conf
 
 - `configs/config.yaml` - Main configuration file (composes all sub-configs)
 - `configs/data/dataset.yaml` - Dataset settings:
-  - Image size: `[256, 256]` (height, width)
+  - Image size: `[192, 192]` (height, width) - resized from original 1024×1024
   - Defect classes: `[dent, nick, scratch, corrosion]`
-  - Batch size: `8` (with gradient accumulation, effective batch size: 32)
-  - Number of workers: `4`
+  - Batch size: `6` (with gradient accumulation, effective batch size: 36)
+  - Number of workers: `2`
 - `configs/model/model.yaml` - Model architecture:
   - Input channels: `3` (RGB)
   - Number of classes: `5` (background + 4 defects)
@@ -333,6 +342,13 @@ All hyperparameters and settings are managed through **Hydra** hierarchical conf
   - Learning rate: `0.0001`
   - Weight decay: `0.00001`
   - Optimizer: `Adam`
+  - Learning rate scheduler: `ReduceLROnPlateau` (patience=3, factor=0.5)
+  - Early stopping: Enabled (patience=5, min_delta=0.001)
+  - Data augmentation: ColorJitter (brightness, contrast, saturation, hue)
+  - Class weights: Automatically computed from training data
+  - Precision: 32-bit (full precision)
+  - Gradient accumulation: 6 batches (effective batch size: 36)
+  - Gradient clipping: 1.0
 - `configs/mlflow/mlflow.yaml` - MLflow tracking:
   - Tracking URI: `http://127.0.0.1:8080`
   - Experiment name: `blade-defect-detection`
@@ -563,7 +579,11 @@ uv run pytest
 
 The model is evaluated using:
 
-- **Loss**: CrossEntropyLoss for multi-class segmentation
+- **Loss Functions**:
+  - **Training**: CrossEntropyLoss only (for speed)
+  - **Validation/Test**: Combined loss (0.5 * CrossEntropy + 0.5 * Dice Loss)
+  - Dice Loss directly optimizes segmentation quality (IoU)
+  - Class weights are applied to CrossEntropyLoss to handle imbalanced data
 - **IoU (Jaccard Index)**: Macro-averaged IoU across all classes
   - Measures overlap between predicted and ground truth masks
   - Range: [0, 1], higher is better
