@@ -67,14 +67,13 @@ Each block uses double convolutions (Conv2d + BatchNorm + ReLU) for feature extr
 - **DVC** - Data version control with Yandex Object Storage (S3-compatible) for 27GB dataset
 - **Hydra** - Hierarchical configuration management for hyperparameters
 - **MLflow** - Experiment tracking with metrics, hyperparameters, and git commit logging
-- **TensorBoard** - Real-time training visualization
 - **Ruff** - Fast Python linter and formatter (replaces black, isort, flake8)
 
 ## Features
 
 - ✅ **Automatic data management**: DVC integration with automatic pull on train/predict
 - ✅ **Flexible configuration**: Hydra-based hierarchical configs for all hyperparameters
-- ✅ **Comprehensive logging**: MLflow (metrics, hyperparameters, git commit id) + TensorBoard
+- ✅ **Comprehensive logging**: MLflow (metrics, hyperparameters, git commit id)
 - ✅ **Model versioning**: Automatic checkpointing with best model selection
 - ✅ **Inference pipeline**: Single-command prediction with visualization
 - ✅ **Code quality**: Pre-commit hooks with ruff, prettier, and code quality checks
@@ -253,11 +252,9 @@ uv run python commands.py train --data_dir=/path/to/data
 5. Trains UNet model for multi-class segmentation with PyTorch Lightning
 6. Saves best checkpoint (lowest validation loss) to `models/best.ckpt`
 7. Logs metrics, hyperparameters, and git commit id to MLflow
-8. Logs real-time metrics to TensorBoard
 
 **Training outputs**:
-- **Model checkpoints**: `models/best.ckpt` (best model), `lightning_logs/version_X/checkpoints/` (all checkpoints)
-- **TensorBoard logs**: `lightning_logs/version_X/` (real-time metrics)
+- **Model checkpoints**: `models/best-*.ckpt` (best model), `models/last*.ckpt` (last checkpoint)
 - **MLflow experiments**: `blade-defect-detection` experiment with all runs
 
 **Logged metrics**:
@@ -293,17 +290,6 @@ uv run python commands.py predict \
 
 ### Monitoring Training
 
-**TensorBoard** (recommended for real-time monitoring):
-```bash
-tensorboard --logdir lightning_logs --host 127.0.0.1 --port 6006
-```
-
-Open http://127.0.0.1:6006 in your browser to view:
-- Training/validation loss curves
-- IoU metrics per class
-- Learning rate schedule
-- Other training metrics
-
 **MLflow UI** (if MLflow server is running):
 ```bash
 uv run mlflow ui --host 127.0.0.1 --port 5000
@@ -320,7 +306,7 @@ Open http://127.0.0.1:5000 in your browser to view:
 uv run mlflow server --host 127.0.0.1 --port 8080
 ```
 
-**Note**: The training code automatically detects if MLflow server is available. If not reachable, training continues with TensorBoard only (graceful fallback).
+**Note**: The training code automatically detects if MLflow server is available. If not reachable, training continues without MLflow logging (graceful fallback).
 
 ## Configuration
 
@@ -401,8 +387,6 @@ blade-defect-detection/
 │   └── README.md                # Data directory info
 ├── models/                      # Saved model checkpoints
 │   └── .gitkeep                 # Keep directory in Git
-├── lightning_logs/              # TensorBoard logs
-│   └── .gitkeep                 # Keep directory in Git
 ├── visualizations/              # Prediction visualizations
 │   └── .gitkeep                 # Keep directory in Git
 ├── .dvc/                        # DVC configuration
@@ -482,7 +466,6 @@ Dependencies are managed using **uv** (modern Python package manager) and define
 
 **Experiment Tracking**:
 - `mlflow>=2.8.0` - Experiment tracking and model registry
-- `tensorboard>=2.20.0` - Real-time training visualization
 
 **Utilities**:
 - `pillow>=10.0.0` - Image processing
@@ -566,7 +549,7 @@ uv run pytest
 **Solution**: Reduce `batch_size` in `configs/data/dataset.yaml` or image size
 
 **Problem**: MLflow connection timeout or server not running
-**Solution**: The code automatically detects MLflow server availability with a 3-second timeout. If unreachable, training continues with TensorBoard only (graceful fallback). Start MLflow server before training: `uv run mlflow server --host 127.0.0.1 --port 8080`
+**Solution**: The code automatically detects MLflow server availability with a 3-second timeout. If unreachable, training continues without MLflow logging (graceful fallback). Start MLflow server before training: `uv run mlflow server --host 127.0.0.1 --port 8080`
 
 ### Data Issues
 
@@ -595,7 +578,7 @@ The test set is either:
 - Pre-split: Uses `data/test/` directory if available
 - Auto-split: 15% of the full dataset (70% train, 15% val, 15% test)
 
-Test metrics are logged after training completes and can be viewed in MLflow and TensorBoard.
+Test metrics are logged after training completes and can be viewed in MLflow.
 
 ## Reproducibility
 
