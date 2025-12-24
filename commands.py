@@ -45,24 +45,12 @@ def _pull_dvc_data(data_path: Path) -> None:
 
     print(f"Pulling data from DVC to {data_path}...")
     try:
-        # Load credentials from .env if available
-        env = os.environ.copy()
-        if os.path.exists(".env"):
-            with open(".env", "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, value = line.split("=", 1)
-                        if key.startswith("AWS_"):
-                            env[key] = value
-
-        # Pull specific data path from DVC
+        # Pull specific data path from DVC (public bucket, no credentials needed)
         result = subprocess.run(
             ["dvc", "pull", str(data_path)],
             check=True,
             capture_output=True,
             text=True,
-            env=env,
         )
         print("Data pulled successfully from DVC")
     except subprocess.CalledProcessError as e:

@@ -2,5 +2,4 @@
     remote = storage
     autostage = true
 ['remote "storage"']
-    url = s3://blade-defect-detection-dataset/dvc-cache
-    endpointurl = https://storage.yandexcloud.net
+    url = https://storage.yandexcloud.net/blade-defect-detection-dataset/dvc-cache

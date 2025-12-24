@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.loggers import MLFlowLogger, TensorBoardLogger
+from pytorch_lightning.loggers import MLFlowLogger
 from torch.utils.data import DataLoader, Subset, random_split
 from torchmetrics import JaccardIndex, MetricCollection
 from torchvision import transforms
@@ -178,10 +178,9 @@ class BladeDefectLightningModule(LightningModule):
         """Test step mirrors validation for reporting."""
         images, masks = batch
         logits = self(images)
-        # Test: Combined loss for final evaluation
         loss_ce = self.criterion_ce(logits, masks)
         loss_dice = self.dice_loss(logits, masks, self.num_classes)
-        loss = 0.7 * loss_ce + 0.3 * loss_dice
+        loss = 0.5 * loss_ce + 0.5 * loss_dice
         preds = torch.argmax(logits, dim=1)
         self.test_metrics(preds, masks)
         self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -394,12 +393,6 @@ def train_model(
     )
 
     loggers = []
-    tensorboard_logger = TensorBoardLogger(
-        save_dir="lightning_logs",
-        name=None,
-    )
-    loggers.append(tensorboard_logger)
-
     mlflow_logger = None
     try:
         if mlflow_tracking_uri.startswith("http"):
@@ -409,7 +402,7 @@ def train_model(
                 if response.status_code != 200:
                     raise ConnectionError(f"MLflow server returned status {response.status_code}")
             except (requests.exceptions.RequestException, ConnectionError) as e:
-                print(f"MLflow server not reachable ({e}), using TensorBoard only")
+                print(f"MLflow server not reachable ({e}), continuing without MLflow logging")
                 mlflow_logger = None
             else:
                 try:
@@ -466,7 +459,7 @@ def train_model(
                     print(f"Set active experiment: {experiment_name}")
 
                 except Exception as e:
-                    print(f"Failed to setup MLflow experiment ({e}), using TensorBoard only")
+                    print(f"Failed to setup MLflow experiment ({e}), continuing without MLflow logging")
                     import traceback
 
                     traceback.print_exc()
@@ -481,7 +474,7 @@ def train_model(
                         loggers.append(mlflow_logger)
                         print(f"MLflow logging enabled for run: {run_name}")
                     except Exception as e:
-                        print(f"MLflow logger creation failed ({e}), using TensorBoard only")
+                        print(f"MLflow logger creation failed ({e}), continuing without MLflow logging")
                         import traceback
 
                         traceback.print_exc()
@@ -503,7 +496,7 @@ def train_model(
             loggers.append(mlflow_logger)
             print("MLflow logging enabled")
     except Exception as e:
-        print(f"MLflow logger initialization failed ({e}), using TensorBoard only")
+        print(f"MLflow logger initialization failed ({e}), continuing without MLflow logging")
         mlflow_logger = None
 
     if mlflow_logger is not None and hasattr(mlflow_logger, 'run_id') and mlflow_logger.run_id:

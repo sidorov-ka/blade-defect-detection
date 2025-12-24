@@ -45,7 +45,8 @@ Manual inspection of turbine blades is time-consuming, subjective, and prone to 
 ### Technical Approach
 
 The solution uses a **UNet architecture** for semantic segmentation, which:
-- Takes RGB images of blades as input (256×256 pixels by default)
+- Takes RGB images of blades as input (configurable size, default: 192×192 pixels)
+- Original dataset images are 1024×1024 pixels (from BladeSynth paper)
 - Outputs pixel-level class predictions (background + 4 defect types)
 - Provides precise spatial localization of defects
 - Handles multi-class segmentation with skip connections for detail preservation
@@ -53,8 +54,8 @@ The solution uses a **UNet architecture** for semantic segmentation, which:
 ### Model Architecture
 
 The model implements a **UNet** architecture with:
-- **Encoder**: 4 downsampling blocks (64→128→256→512 channels) with MaxPooling
-- **Bottleneck**: 1024-channel bottleneck layer
+- **Encoder**: 4 downsampling blocks (40→80→160→320 channels) with MaxPooling
+- **Bottleneck**: 640-channel bottleneck layer
 - **Decoder**: 4 upsampling blocks with skip connections from encoder
 - **Output**: 5-class segmentation map (background + 4 defect types)
 
@@ -63,17 +64,16 @@ Each block uses double convolutions (Conv2d + BatchNorm + ReLU) for feature extr
 ### Key Technologies
 
 - **PyTorch Lightning** - Training framework with automatic GPU support and checkpointing
-- **DVC** - Data version control with Yandex Object Storage (S3-compatible) for 27GB dataset
+- **DVC** - Data version control with Yandex Object Storage (public HTTP access) for 27GB dataset
 - **Hydra** - Hierarchical configuration management for hyperparameters
 - **MLflow** - Experiment tracking with metrics, hyperparameters, and git commit logging
-- **TensorBoard** - Real-time training visualization
 - **Ruff** - Fast Python linter and formatter (replaces black, isort, flake8)
 
 ## Features
 
 - ✅ **Automatic data management**: DVC integration with automatic pull on train/predict
 - ✅ **Flexible configuration**: Hydra-based hierarchical configs for all hyperparameters
-- ✅ **Comprehensive logging**: MLflow (metrics, hyperparameters, git commit id) + TensorBoard
+- ✅ **Comprehensive logging**: MLflow (metrics, hyperparameters, git commit id)
 - ✅ **Model versioning**: Automatic checkpointing with best model selection
 - ✅ **Inference pipeline**: Single-command prediction with visualization
 - ✅ **Code quality**: Pre-commit hooks with ruff, prettier, and code quality checks
@@ -86,7 +86,6 @@ Each block uses double convolutions (Conv2d + BatchNorm + ReLU) for feature extr
 - Python 3.9+
 - [uv](https://github.com/astral-sh/uv) for dependency management
 - CUDA-capable GPU (recommended for training)
-- Yandex.Cloud account with Object Storage bucket (for DVC)
 
 ### Installation
 
@@ -143,31 +142,27 @@ uv run pre-commit run -a
 cp env.example .env
 ```
 
-2. **Configure S3 credentials** for DVC in `.env`:
+2. **Configure environment variables** (optional) in `.env`:
 ```env
-# Yandex Object Storage (S3-compatible) credentials for DVC
-AWS_ACCESS_KEY_ID=your_access_key_id
-AWS_SECRET_ACCESS_KEY=your_secret_access_key
-
 # MLflow Configuration (optional)
+# MLflow server should be running on this URI for experiment tracking
 MLFLOW_TRACKING_URI=http://127.0.0.1:8080
 
 # Data Directory (optional, defaults to 'data')
 DATA_DIR=data
 ```
 
-**Note**: `.env` is already in `.gitignore` - your credentials won't be committed.
+**Note**: 
+- `.env` is already in `.gitignore`
+- DVC uses public bucket access, no credentials needed for pulling data
 
 ### DVC Setup
 
-Data is managed by DVC and stored in Yandex Object Storage. The DVC remote is already configured.
+Data is managed by DVC and stored in Yandex Object Storage (public bucket). The DVC remote is already configured for public HTTP access - no credentials needed.
 
 **First time setup** (if data is not available locally):
 ```bash
-# Load environment variables
-export $(cat .env | grep AWS | xargs)
-
-# Pull data from cloud storage
+# Pull data from cloud storage (public access, no credentials needed)
 uv run dvc pull
 ```
 
@@ -196,13 +191,19 @@ data/
 - Images and masks should have matching filenames
 - Normal images don't require masks (all background)
 - Masks should be binary (0=background, 255=defect) or normalized (0-1)
+- Some files in the original dataset may have prefixes like `valid_` in their names (from pre-split validation sets)
 
-The dataset can also be pre-split into train/val/test directories. If `data/train/`, `data/val/`, and `data/test/` exist, they will be used directly. Otherwise, the code automatically splits the dataset 70/15/15.
+**Dataset Splitting**:
+- If `data/train/`, `data/val/`, and `data/test/` directories exist, they will be used directly
+- Otherwise, the code automatically splits the dataset 70/15/15 (train/val/test) using a fixed random seed (42)
+- When using automatic splitting, files with prefixes (like `valid_`) may appear in any split, but their original names are preserved
 
 ### Dataset Statistics
 
 - **Total size**: ~27 GB
 - **Total files**: ~45,000 images
+- **Original image resolution**: 1024×1024 pixels (from BladeSynth paper)
+- **Training image size**: Configurable via `configs/data/dataset.yaml` (default: 192×192)
 - **Classes**: 4 defect types + background
 - **Format**: PNG images with corresponding mask files
 - **Storage**: Yandex Object Storage (S3-compatible) via DVC
@@ -246,15 +247,15 @@ uv run python commands.py train --data_dir=/path/to/data
 5. Trains UNet model for multi-class segmentation with PyTorch Lightning
 6. Saves best checkpoint (lowest validation loss) to `models/best.ckpt`
 7. Logs metrics, hyperparameters, and git commit id to MLflow
-8. Logs real-time metrics to TensorBoard
 
 **Training outputs**:
-- **Model checkpoints**: `models/best.ckpt` (best model), `lightning_logs/version_X/checkpoints/` (all checkpoints)
-- **TensorBoard logs**: `lightning_logs/version_X/` (real-time metrics)
+- **Model checkpoints**: `models/best-*.ckpt` (best model), `models/last*.ckpt` (last checkpoint)
 - **MLflow experiments**: `blade-defect-detection` experiment with all runs
 
 **Logged metrics**:
-- `train_loss`, `val_loss`, `test_loss` - CrossEntropy loss
+- `train_loss` - CrossEntropy loss (training only)
+- `val_loss`, `val_loss_ce`, `val_loss_dice` - Combined loss (0.5 * CrossEntropy + 0.5 * Dice) and components
+- `test_loss` - Combined loss (0.5 * CrossEntropy + 0.5 * Dice)
 - `train_iou`, `val_iou`, `test_iou` - Jaccard Index (IoU) for segmentation quality
 - Hyperparameters: learning_rate, batch_size, num_epochs, image_size, etc.
 - Git commit ID as tag for reproducibility
@@ -284,17 +285,6 @@ uv run python commands.py predict \
 
 ### Monitoring Training
 
-**TensorBoard** (recommended for real-time monitoring):
-```bash
-tensorboard --logdir lightning_logs --host 127.0.0.1 --port 6006
-```
-
-Open http://127.0.0.1:6006 in your browser to view:
-- Training/validation loss curves
-- IoU metrics per class
-- Learning rate schedule
-- Other training metrics
-
 **MLflow UI** (if MLflow server is running):
 ```bash
 uv run mlflow ui --host 127.0.0.1 --port 5000
@@ -311,7 +301,7 @@ Open http://127.0.0.1:5000 in your browser to view:
 uv run mlflow server --host 127.0.0.1 --port 8080
 ```
 
-**Note**: The training code automatically detects if MLflow server is available. If not reachable, training continues with TensorBoard only (graceful fallback).
+**Note**: The training code automatically detects if MLflow server is available. If not reachable, training continues without MLflow logging (graceful fallback).
 
 ## Configuration
 
@@ -321,10 +311,10 @@ All hyperparameters and settings are managed through **Hydra** hierarchical conf
 
 - `configs/config.yaml` - Main configuration file (composes all sub-configs)
 - `configs/data/dataset.yaml` - Dataset settings:
-  - Image size: `[256, 256]` (height, width)
+  - Image size: `[192, 192]` (height, width) - resized from original 1024×1024
   - Defect classes: `[dent, nick, scratch, corrosion]`
-  - Batch size: `8` (with gradient accumulation, effective batch size: 32)
-  - Number of workers: `4`
+  - Batch size: `6` (with gradient accumulation, effective batch size: 36)
+  - Number of workers: `2`
 - `configs/model/model.yaml` - Model architecture:
   - Input channels: `3` (RGB)
   - Number of classes: `5` (background + 4 defects)
@@ -333,6 +323,13 @@ All hyperparameters and settings are managed through **Hydra** hierarchical conf
   - Learning rate: `0.0001`
   - Weight decay: `0.00001`
   - Optimizer: `Adam`
+  - Learning rate scheduler: `ReduceLROnPlateau` (patience=3, factor=0.5)
+  - Early stopping: Enabled (patience=5, min_delta=0.001)
+  - Data augmentation: ColorJitter (brightness, contrast, saturation, hue)
+  - Class weights: Automatically computed from training data
+  - Precision: 32-bit (full precision)
+  - Gradient accumulation: 6 batches (effective batch size: 36)
+  - Gradient clipping: 1.0
 - `configs/mlflow/mlflow.yaml` - MLflow tracking:
   - Tracking URI: `http://127.0.0.1:8080`
   - Experiment name: `blade-defect-detection`
@@ -385,8 +382,6 @@ blade-defect-detection/
 │   └── README.md                # Data directory info
 ├── models/                      # Saved model checkpoints
 │   └── .gitkeep                 # Keep directory in Git
-├── lightning_logs/              # TensorBoard logs
-│   └── .gitkeep                 # Keep directory in Git
 ├── visualizations/              # Prediction visualizations
 │   └── .gitkeep                 # Keep directory in Git
 ├── .dvc/                        # DVC configuration
@@ -406,7 +401,7 @@ blade-defect-detection/
 
 **Pull data from cloud** (if not available locally):
 ```bash
-export $(cat .env | grep AWS | xargs)
+# Public bucket access, no credentials needed
 uv run dvc pull
 ```
 
@@ -466,7 +461,6 @@ Dependencies are managed using **uv** (modern Python package manager) and define
 
 **Experiment Tracking**:
 - `mlflow>=2.8.0` - Experiment tracking and model registry
-- `tensorboard>=2.20.0` - Real-time training visualization
 
 **Utilities**:
 - `pillow>=10.0.0` - Image processing
@@ -538,8 +532,8 @@ uv run pytest
 
 ### DVC Issues
 
-**Problem**: `dvc pull` fails with authentication error
-**Solution**: Check `.env` file has correct `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+**Problem**: `dvc pull` fails
+**Solution**: Check internet connection. The bucket is public and doesn't require credentials.
 
 **Problem**: Data not found locally
 **Solution**: Run `uv run dvc pull` or data will be automatically pulled when running `train`
@@ -550,7 +544,7 @@ uv run pytest
 **Solution**: Reduce `batch_size` in `configs/data/dataset.yaml` or image size
 
 **Problem**: MLflow connection timeout or server not running
-**Solution**: The code automatically detects MLflow server availability with a 3-second timeout. If unreachable, training continues with TensorBoard only (graceful fallback). Start MLflow server before training: `uv run mlflow server --host 127.0.0.1 --port 8080`
+**Solution**: The code automatically detects MLflow server availability with a 3-second timeout. If unreachable, training continues without MLflow logging (graceful fallback). Start MLflow server before training: `uv run mlflow server --host 127.0.0.1 --port 8080`
 
 ### Data Issues
 
@@ -563,7 +557,11 @@ uv run pytest
 
 The model is evaluated using:
 
-- **Loss**: CrossEntropyLoss for multi-class segmentation
+- **Loss Functions**:
+  - **Training**: CrossEntropyLoss only (for speed)
+  - **Validation/Test**: Combined loss (0.5 * CrossEntropy + 0.5 * Dice Loss)
+  - Dice Loss directly optimizes segmentation quality (IoU)
+  - Class weights are applied to CrossEntropyLoss to handle imbalanced data
 - **IoU (Jaccard Index)**: Macro-averaged IoU across all classes
   - Measures overlap between predicted and ground truth masks
   - Range: [0, 1], higher is better
@@ -575,7 +573,7 @@ The test set is either:
 - Pre-split: Uses `data/test/` directory if available
 - Auto-split: 15% of the full dataset (70% train, 15% val, 15% test)
 
-Test metrics are logged after training completes and can be viewed in MLflow and TensorBoard.
+Test metrics are logged after training completes and can be viewed in MLflow.
 
 ## Reproducibility
 
