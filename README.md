@@ -166,7 +166,14 @@ Data is managed by DVC and stored in Yandex Object Storage (public bucket). The 
 uv run dvc pull
 ```
 
-**Note**: Data will be automatically pulled when running `train` command if not available locally.
+**Note**: 
+- Data will be automatically pulled when running `train` command if not available locally
+- Progress indicator will show during download (may take several minutes for ~30GB dataset)
+- If you experience timeout errors during `dvc pull`, you can increase timeouts:
+  ```bash
+  uv run dvc remote modify storage read_timeout 600
+  uv run dvc remote modify storage connect_timeout 180
+  ```
 
 ## Data Structure
 

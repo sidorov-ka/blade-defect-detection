@@ -46,18 +46,65 @@ def _pull_dvc_data(data_path: Path) -> None:
     print(f"Pulling data from DVC to {data_path}...")
     try:
         # Pull specific data path from DVC (public bucket, no credentials needed)
-        result = subprocess.run(
-            ["dvc", "pull", str(data_path)],
-            check=True,
-            capture_output=True,
+        # Use uv run to ensure DVC is available in the virtual environment
+        from subprocess import Popen, PIPE
+        import time
+        import threading
+
+        process = Popen(
+            ["uv", "run", "dvc", "pull", str(data_path)],
+            stdout=PIPE,
+            stderr=PIPE,
             text=True,
+            bufsize=1,
         )
-        print("Data pulled successfully from DVC")
+
+        # Show progress indicator
+        print("Downloading data (this may take several minutes for large datasets)...")
+        print("Progress: ", end="", flush=True)
+
+        def show_progress():
+            """Show animated progress dots."""
+            dots = ["", ".", "..", "..."]
+            i = 0
+            while process.poll() is None:
+                print(f"\rProgress: {dots[i % len(dots)]}", end="", flush=True)
+                i += 1
+                time.sleep(0.5)
+
+        # Start progress indicator in background
+        progress_thread = threading.Thread(target=show_progress, daemon=True)
+        progress_thread.start()
+
+        # Wait for process and capture output with timeout
+        try:
+            stdout, stderr = process.communicate(timeout=600)  # 10 minutes timeout
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+
+        # Stop progress indicator
+        print("\r" + " " * 20 + "\r", end="")  # Clear progress line
+
+        if process.returncode == 0:
+            print("✓ Data pulled successfully from DVC")
+        else:
+            error_msg = stderr if stderr else stdout
+            raise subprocess.CalledProcessError(
+                process.returncode, "dvc pull", stderr=error_msg
+            )
+
+    except subprocess.TimeoutExpired:
+        print("\n⚠ Warning: DVC pull timed out (10 minutes). This may be due to slow network connection.")
+        print("You can try running manually: uv run dvc pull")
+        print("Continuing with local data if available...")
     except subprocess.CalledProcessError as e:
-        print(f"Warning: Failed to pull data from DVC: {e.stderr}")
+        print(f"\n⚠ Warning: Failed to pull data from DVC: {e.stderr if hasattr(e, 'stderr') else str(e)}")
+        print("You can try running manually: uv run dvc pull")
         print("Continuing with local data if available...")
     except FileNotFoundError:
-        print("Warning: DVC not found. Make sure DVC is installed.")
+        print("\n⚠ Warning: uv or DVC not found. Make sure uv is installed and DVC is in dependencies.")
         print("Continuing with local data if available...")
 
 
