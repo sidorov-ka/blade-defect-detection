@@ -20,7 +20,7 @@ class DoubleConv(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """Initialize weights to prevent NaN values."""
+        """Initialize weights using Kaiming normal for Conv2d and constant for BatchNorm."""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
@@ -64,7 +64,6 @@ class UNet(nn.Module):
         self.up1 = nn.ConvTranspose2d(80, 40, kernel_size=2, stride=2)
         self.dec1 = DoubleConv(80, 40)
 
-        # Final output layer
         self.final = nn.Conv2d(40, num_classes, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

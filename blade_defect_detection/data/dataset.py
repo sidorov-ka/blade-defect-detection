@@ -50,7 +50,6 @@ class BladeDefectDataset(Dataset):
         images_dir = self.data_dir / "images"
         masks_dir = self.data_dir / "masks"
 
-        # Collect defect samples with masks
         for defect_class in self.defect_classes:
             class_images_dir = images_dir / defect_class
             class_masks_dir = masks_dir / defect_class
@@ -72,10 +71,9 @@ class BladeDefectDataset(Dataset):
                             "image_path": image_path,
                             "mask_path": mask_path,
                             "class_idx": self.class_to_idx[defect_class],
-                        }
-                    )
+                    }
+                )
 
-        # Collect normal samples (no masks, all background)
         normal_dir = images_dir / "normal"
         if normal_dir.exists():
             image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
@@ -108,11 +106,9 @@ class BladeDefectDataset(Dataset):
         """
         sample = self.samples[idx]
 
-        # Load image
         image = Image.open(sample["image_path"]).convert("RGB")
         image = image.resize(self.image_size, Image.BILINEAR)
 
-        # Load or create mask
         if sample["mask_path"] is not None:
             mask = Image.open(sample["mask_path"]).convert("L")
             mask = mask.resize(self.image_size, Image.NEAREST)
@@ -126,11 +122,6 @@ class BladeDefectDataset(Dataset):
             mask_array = mask_array.astype(np.int64)
 
             if mask_array.min() < 0 or mask_array.max() >= self.num_classes:
-                print(
-                    f"WARNING: Invalid mask values in {sample['mask_path']}: "
-                    f"min={mask_array.min()}, max={mask_array.max()}, "
-                    f"expected range [0, {self.num_classes-1}]. Clamping to valid range."
-                )
                 mask_array = np.clip(mask_array, 0, self.num_classes - 1)
         else:
             mask_array = np.zeros(self.image_size, dtype=np.int64)
@@ -139,11 +130,6 @@ class BladeDefectDataset(Dataset):
         mask_tensor = torch.from_numpy(mask_array).long()
 
         if mask_tensor.min() < 0 or mask_tensor.max() >= self.num_classes:
-            print(
-                f"WARNING: Mask validation failed: min={mask_tensor.min()}, "
-                f"max={mask_tensor.max()}, num_classes={self.num_classes}. "
-                f"Clamping to valid range."
-            )
             mask_tensor = torch.clamp(mask_tensor, 0, self.num_classes - 1)
 
         if self.transform:

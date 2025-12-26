@@ -59,7 +59,6 @@ def predict_image(
     """
     image_path = Path(image_path)
 
-    # Resolve checkpoint
     if checkpoint_path is None:
         models_dir = Path("models")
         ckpts = sorted(
@@ -71,13 +70,11 @@ def predict_image(
     else:
         checkpoint_path = Path(checkpoint_path)
 
-    # Load model from checkpoint
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BladeDefectLightningModule.load_from_checkpoint(str(checkpoint_path))
     model.to(device)
     model.eval()
 
-    # Load and preprocess image
     img = Image.open(image_path).convert("RGB")
     img = img.resize(image_size, Image.BILINEAR)
     to_tensor = transforms.ToTensor()
@@ -87,7 +84,6 @@ def predict_image(
         logits = model(img_tensor)
         pred_mask = torch.argmax(logits, dim=1).squeeze(0).cpu()
 
-    # Prepare visualization
     palette = [
         (0, 0, 0),
         (255, 0, 0),
@@ -104,7 +100,6 @@ def predict_image(
     pred_color = mask_to_color(pred_mask, palette)
     pred_overlay = Image.blend(base_image.convert("RGB"), pred_color, alpha=0.4)
 
-    # Major predicted class (excluding background)
     if pred_mask.max() > 0:
         pred_major = int(pred_mask[pred_mask > 0].mode()[0])
     else:
@@ -113,7 +108,6 @@ def predict_image(
         class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
     )
 
-    # Create canvas with caption
     combined_height = pred_overlay.height + 30
     canvas = Image.new("RGB", (pred_overlay.width, combined_height), (255, 255, 255))
     canvas.paste(pred_overlay, (0, 0))
@@ -132,7 +126,6 @@ def predict_image(
     )
 
     if output_path is None:
-        # Save to visualizations/ instead of next to the source image
         vis_dir = Path("visualizations")
         vis_dir.mkdir(parents=True, exist_ok=True)
         output_path = vis_dir / f"{image_path.stem}_pred.png"

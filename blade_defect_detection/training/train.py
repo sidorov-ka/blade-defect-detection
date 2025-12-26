@@ -1,6 +1,7 @@
 """PyTorch Lightning module for training and inference."""
 
 import subprocess
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -46,7 +47,6 @@ class BladeDefectLightningModule(LightningModule):
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
 
-        # Model
         self.model = BladeDefectModel(num_classes=num_classes)
 
         if class_weights is not None:
@@ -84,7 +84,7 @@ class BladeDefectLightningModule(LightningModule):
     def dice_loss(
         self, pred: torch.Tensor, target: torch.Tensor, num_classes: int, smooth: float = 1e-6
     ) -> torch.Tensor:
-        """Compute Dice Loss for multi-class segmentation (optimized vectorized version).
+        """Compute Dice Loss for multi-class segmentation.
 
         Args:
             pred: Logits tensor [B, num_classes, H, W]
@@ -124,13 +124,6 @@ class BladeDefectLightningModule(LightningModule):
 
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"Warning: Invalid loss at step {batch_idx}: {loss.item()}")
-            print(
-                f"  Logits: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
-                f"mean={logits.mean().item():.4f}"
-            )
-            print(
-                f"  Masks: min={mask_min}, max={mask_max}, unique={torch.unique(masks).tolist()}"
-            )
             loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
         preds = torch.argmax(logits, dim=1)
@@ -147,11 +140,6 @@ class BladeDefectLightningModule(LightningModule):
 
         mask_min, mask_max = masks.min().item(), masks.max().item()
         if mask_min < 0 or mask_max >= self.num_classes:
-            print(
-                f"WARNING: Invalid mask values at val step {batch_idx}: "
-                f"min={mask_min}, max={mask_max}, "
-                f"expected range [0, {self.num_classes-1}]. Clamping to valid range."
-            )
             masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
@@ -175,7 +163,7 @@ class BladeDefectLightningModule(LightningModule):
         return loss
 
     def test_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
-        """Test step mirrors validation for reporting."""
+        """Test step."""
         images, masks = batch
         logits = self(images)
         loss_ce = self.criterion_ce(logits, masks)
@@ -194,7 +182,7 @@ class BladeDefectLightningModule(LightningModule):
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        
+
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode="min",
@@ -202,7 +190,7 @@ class BladeDefectLightningModule(LightningModule):
             patience=3,
             min_lr=1e-6,
         )
-        
+
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -251,7 +239,6 @@ def train_model(
         ),
     ])
 
-    # Check if data is split into train/val/test or needs automatic splitting
     train_dir = data_dir / "train"
     val_dir = data_dir / "val"
     test_dir = data_dir / "test"
@@ -460,23 +447,19 @@ def train_model(
 
                 except Exception as e:
                     print(f"Failed to setup MLflow experiment ({e}), continuing without MLflow logging")
-                    import traceback
-
                     traceback.print_exc()
                     mlflow_logger = None
                 else:
                     try:
-                        mlflow_logger = MLFlowLogger(
-                            experiment_name=experiment_name,
-                            tracking_uri=mlflow_tracking_uri,
-                            run_name=run_name,
-                        )
-                        loggers.append(mlflow_logger)
+                mlflow_logger = MLFlowLogger(
+                    experiment_name=experiment_name,
+                    tracking_uri=mlflow_tracking_uri,
+                    run_name=run_name,
+                )
+                loggers.append(mlflow_logger)
                         print(f"MLflow logging enabled for run: {run_name}")
                     except Exception as e:
                         print(f"MLflow logger creation failed ({e}), continuing without MLflow logging")
-                        import traceback
-
                         traceback.print_exc()
                         mlflow_logger = None
         else:
@@ -573,7 +556,6 @@ def train_model(
         f"~{len(train_loader) * num_epochs / 60:.1f} minutes (rough estimate)"
     )
     try:
-        print(f"Calling trainer.fit() for {num_epochs} epochs...")
         trainer.fit(model, train_loader, val_loader)
         actual_epochs = trainer.current_epoch + 1
         print(f"\n✓ Training completed successfully after {actual_epochs} epochs!")
@@ -592,9 +574,7 @@ def train_model(
         raise
     except Exception as e:
         print(f"\n✗ ERROR: Training failed with exception: {e}")
-        import traceback
         traceback.print_exc()
-        # Don't raise - continue to test if possible
         print("Continuing to test evaluation despite training error...")
     finally:
         print(
@@ -613,10 +593,9 @@ def train_model(
         print("Test evaluation completed successfully")
     except Exception as e:
         print(f"WARNING: Test evaluation failed: {e}")
-        import traceback
         traceback.print_exc()
         test_results = None
-    
+
     if test_results:
         print("\nTest Results:")
         for key, value in test_results[0].items():
@@ -635,8 +614,6 @@ def train_model(
             print("✓ Callback metrics logged to MLflow")
         except Exception as e:
             print(f"⚠ WARNING: Failed to log callback metrics to MLflow: {e}")
-            import traceback
-
             traceback.print_exc()
 
         try:
@@ -649,8 +626,6 @@ def train_model(
                 print("✓ Test metrics logged to MLflow")
         except Exception as e:
             print(f"⚠ WARNING: Failed to log test metrics to MLflow: {e}")
-            import traceback
-
             traceback.print_exc()
     else:
         print("MLflow logger not available, skipping MLflow logging")

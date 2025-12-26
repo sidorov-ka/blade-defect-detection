@@ -1,9 +1,11 @@
 """CLI commands for blade defect detection."""
 
-import os
 import subprocess
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
+from subprocess import PIPE, Popen
 from typing import Optional
 
 import fire
@@ -27,7 +29,6 @@ def _pull_dvc_data(data_path: Path) -> None:
     Args:
         data_path: Path to data directory or file.
     """
-    # If it's a directory – check that it contains at least one real image file.
     if data_path.exists() and data_path.is_dir():
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
         has_images = any(
@@ -38,19 +39,12 @@ def _pull_dvc_data(data_path: Path) -> None:
             print(f"Data already exists at {data_path}, skipping DVC pull")
             return
 
-    # If it's a regular file – consider it present and skip DVC pull.
     if data_path.exists() and data_path.is_file():
         print(f"Data file already exists at {data_path}, skipping DVC pull")
         return
 
     print(f"Pulling data from DVC to {data_path}...")
     try:
-        # Pull specific data path from DVC (public bucket, no credentials needed)
-        # Use uv run to ensure DVC is available in the virtual environment
-        from subprocess import Popen, PIPE
-        import time
-        import threading
-
         process = Popen(
             ["uv", "run", "dvc", "pull", str(data_path)],
             stdout=PIPE,
@@ -59,7 +53,6 @@ def _pull_dvc_data(data_path: Path) -> None:
             bufsize=1,
         )
 
-        # Show progress indicator
         print("Downloading data (this may take several minutes for large datasets)...")
         print("Progress: ", end="", flush=True)
 
@@ -72,20 +65,12 @@ def _pull_dvc_data(data_path: Path) -> None:
                 i += 1
                 time.sleep(0.5)
 
-        # Start progress indicator in background
         progress_thread = threading.Thread(target=show_progress, daemon=True)
         progress_thread.start()
 
-        # Wait for process and capture output with timeout
-        try:
-            stdout, stderr = process.communicate(timeout=600)  # 10 minutes timeout
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            raise
+        stdout, stderr = process.communicate()
 
-        # Stop progress indicator
-        print("\r" + " " * 20 + "\r", end="")  # Clear progress line
+        print("\r" + " " * 20 + "\r", end="")
 
         if process.returncode == 0:
             print("✓ Data pulled successfully from DVC")
@@ -95,10 +80,6 @@ def _pull_dvc_data(data_path: Path) -> None:
                 process.returncode, "dvc pull", stderr=error_msg
             )
 
-    except subprocess.TimeoutExpired:
-        print("\n⚠ Warning: DVC pull timed out (10 minutes). This may be due to slow network connection.")
-        print("You can try running manually: uv run dvc pull")
-        print("Continuing with local data if available...")
     except subprocess.CalledProcessError as e:
         print(f"\n⚠ Warning: Failed to pull data from DVC: {e.stderr if hasattr(e, 'stderr') else str(e)}")
         print("You can try running manually: uv run dvc pull")
@@ -125,21 +106,15 @@ def train(
     with initialize(config_path=config_path, version_base=None):
         cfg = compose(config_name=config_name)
 
-    # Override data_dir if provided
     if data_dir:
         cfg.data.data.data_dir = data_dir
 
-    # Convert to absolute path
     data_dir_path = Path(cfg.data.data.data_dir).resolve()
-
-    # Pull data from DVC if needed
     _pull_dvc_data(data_dir_path)
 
-    # Print config
     print("Configuration:")
     print(OmegaConf.to_yaml(cfg))
 
-    # Generate run_name if not provided
     run_name = cfg.mlflow.mlflow.run_name
     if run_name is None:
         image_size = tuple(cfg.data.data.image_size)
@@ -149,7 +124,6 @@ def train(
         run_name = f"img{image_size[0]}x{image_size[1]}_bs{batch_size}_lr{lr}_{timestamp}"
         print(f"Generated run_name: {run_name}")
 
-    # Train
     train_model(
         data_dir=data_dir_path,
         image_size=tuple(cfg.data.data.image_size),
@@ -193,13 +167,11 @@ def predict(
     image_size = tuple(cfg.data.data.image_size)
     defect_classes = list(cfg.data.data.defect_classes)
 
-    # Pull models from DVC if needed
     if checkpoint_path is None:
         models_dir = Path("models")
         if not models_dir.exists() or not list(models_dir.glob("*.ckpt")):
             _pull_dvc_data(models_dir)
 
-    # Use predict_image from inference module
     result_path = predict_image(
         image_path=Path(image_path),
         checkpoint_path=Path(checkpoint_path) if checkpoint_path else None,
