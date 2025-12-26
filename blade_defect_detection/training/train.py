@@ -451,12 +451,12 @@ def train_model(
                     mlflow_logger = None
                 else:
                     try:
-                mlflow_logger = MLFlowLogger(
-                    experiment_name=experiment_name,
-                    tracking_uri=mlflow_tracking_uri,
-                    run_name=run_name,
-                )
-                loggers.append(mlflow_logger)
+                        mlflow_logger = MLFlowLogger(
+                            experiment_name=experiment_name,
+                            tracking_uri=mlflow_tracking_uri,
+                            run_name=run_name,
+                        )
+                        loggers.append(mlflow_logger)
                         print(f"MLflow logging enabled for run: {run_name}")
                     except Exception as e:
                         print(f"MLflow logger creation failed ({e}), continuing without MLflow logging")
