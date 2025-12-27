@@ -47,7 +47,7 @@ htmlcov/
 # Keep data/ directory structure but ignore contents (files only)
 /data/**/*
 !/data/**/
-!data/README.md
+!data/.gitkeep
 # Keep models/ directory structure but ignore contents
 /models/*
 !models/.gitkeep
