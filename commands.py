@@ -32,8 +32,7 @@ def _pull_dvc_data(data_path: Path) -> None:
     if data_path.exists() and data_path.is_dir():
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
         has_images = any(
-            p.is_file() and p.suffix.lower() in image_extensions
-            for p in data_path.rglob("*")
+            p.is_file() and p.suffix.lower() in image_extensions for p in data_path.rglob("*")
         )
         if has_images:
             print(f"Data already exists at {data_path}, skipping DVC pull")
@@ -50,7 +49,7 @@ def _pull_dvc_data(data_path: Path) -> None:
             try:
                 if attempt > 1:
                     print(f"\nRetry attempt {attempt}/{max_retries}...")
-                
+
                 process = Popen(
                     ["uv", "run", "dvc", "pull", str(data_path)],
                     stdout=PIPE,
@@ -92,19 +91,22 @@ def _pull_dvc_data(data_path: Path) -> None:
                         process.returncode, "dvc pull", stderr=error_msg
                     )
             except FileNotFoundError:
-                # If uv is not found, no point in retrying
                 raise
-            except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError:
                 if attempt < max_retries:
                     continue
                 raise
 
     except subprocess.CalledProcessError as e:
-        print(f"\n⚠ Warning: Failed to pull data from DVC: {e.stderr if hasattr(e, 'stderr') else str(e)}")
+        error_msg = e.stderr if hasattr(e, "stderr") else str(e)
+        print(f"\n⚠ Warning: Failed to pull data from DVC: {error_msg}")
         print("You can try running manually: uv run dvc pull")
         print("Continuing with local data if available...")
     except FileNotFoundError:
-        print("\n⚠ Warning: uv or DVC not found. Make sure uv is installed and DVC is in dependencies.")
+        print(
+            "\n⚠ Warning: uv or DVC not found. "
+            "Make sure uv is installed and DVC is in dependencies."
+        )
         print("Continuing with local data if available...")
 
 

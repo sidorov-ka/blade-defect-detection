@@ -1,7 +1,8 @@
 """Prediction and inference utilities for blade defect detection."""
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 
 import torch
 from PIL import Image, ImageDraw, ImageFont
@@ -10,9 +11,7 @@ from torchvision import transforms
 from blade_defect_detection.training.train import BladeDefectLightningModule
 
 
-def mask_to_color(
-    mask: torch.Tensor, palette: Sequence[tuple[int, int, int]]
-) -> Image.Image:
+def mask_to_color(mask: torch.Tensor, palette: Sequence[tuple[int, int, int]]) -> Image.Image:
     """Convert mask tensor [H, W] to a color PIL image using palette.
 
     Args:
@@ -61,9 +60,7 @@ def predict_image(
 
     if checkpoint_path is None:
         models_dir = Path("models")
-        ckpts = sorted(
-            models_dir.glob("*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True
-        )
+        ckpts = sorted(models_dir.glob("*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not ckpts:
             raise FileNotFoundError("No checkpoints found in models/ directory")
         checkpoint_path = ckpts[0]
@@ -92,9 +89,7 @@ def predict_image(
         (255, 255, 0),
         (255, 0, 255),
     ]
-    class_names = ["background"] + list(
-        defect_classes or ["dent", "nick", "scratch", "corrosion"]
-    )
+    class_names = ["background"] + list(defect_classes or ["dent", "nick", "scratch", "corrosion"])
 
     base_image = img
     pred_color = mask_to_color(pred_mask, palette)
@@ -104,9 +99,7 @@ def predict_image(
         pred_major = int(pred_mask[pred_mask > 0].mode()[0])
     else:
         pred_major = 0
-    pred_label = (
-        class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
-    )
+    pred_label = class_names[pred_major] if pred_major < len(class_names) else str(pred_major)
 
     combined_height = pred_overlay.height + 30
     canvas = Image.new("RGB", (pred_overlay.width, combined_height), (255, 255, 255))

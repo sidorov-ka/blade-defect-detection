@@ -1,7 +1,7 @@
 """UNet model for blade defect segmentation."""
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class DoubleConv(nn.Module):
@@ -117,4 +117,3 @@ class BladeDefectModel(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
         return self.model(x)
-

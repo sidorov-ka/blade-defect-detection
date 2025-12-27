@@ -8,12 +8,12 @@ from typing import Optional
 import mlflow
 import requests
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
-from torch.utils.data import DataLoader, Subset, random_split
+from torch import nn
+from torch.utils.data import DataLoader, random_split
 from torchmetrics import JaccardIndex, MetricCollection
 from torchvision import transforms
 
@@ -110,21 +110,11 @@ class BladeDefectLightningModule(LightningModule):
         """Training step."""
         images, masks = batch
 
-        mask_min, mask_max = masks.min().item(), masks.max().item()
-        if mask_min < 0 or mask_max >= self.num_classes:
-            print(
-                f"WARNING: Invalid mask values at train step {batch_idx}: "
-                f"min={mask_min}, max={mask_max}, "
-                f"expected range [0, {self.num_classes-1}]. Clamping to valid range."
-            )
+        if masks.min() < 0 or masks.max() >= self.num_classes:
             masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
         loss = self.criterion_ce(logits, masks)
-
-        if torch.isnan(loss) or torch.isinf(loss):
-            print(f"Warning: Invalid loss at step {batch_idx}: {loss.item()}")
-            loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
         preds = torch.argmax(logits, dim=1)
         self.train_metrics(preds, masks)
@@ -138,8 +128,7 @@ class BladeDefectLightningModule(LightningModule):
         """Validation step."""
         images, masks = batch
 
-        mask_min, mask_max = masks.min().item(), masks.max().item()
-        if mask_min < 0 or mask_max >= self.num_classes:
+        if masks.min() < 0 or masks.max() >= self.num_classes:
             masks = torch.clamp(masks, 0, self.num_classes - 1)
 
         logits = self(images)
@@ -149,10 +138,6 @@ class BladeDefectLightningModule(LightningModule):
 
         self.log("val_loss_ce", loss_ce, on_step=False, on_epoch=True)
         self.log("val_loss_dice", loss_dice, on_step=False, on_epoch=True)
-
-        if torch.isnan(loss) or torch.isinf(loss):
-            print(f"Warning: Invalid loss at val step {batch_idx}: {loss.item()}")
-            loss = torch.tensor(1.0, device=loss.device, requires_grad=True)
 
         preds = torch.argmax(logits, dim=1)
         self.val_metrics(preds, masks)
@@ -230,14 +215,16 @@ def train_model(
     """
     data_dir = Path(data_dir)
 
-    train_transform = transforms.Compose([
-        transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.2,
-            hue=0.1,
-        ),
-    ])
+    train_transform = transforms.Compose(
+        [
+            transforms.ColorJitter(
+                brightness=0.2,
+                contrast=0.2,
+                saturation=0.2,
+                hue=0.1,
+            ),
+        ]
+    )
 
     train_dir = data_dir / "train"
     val_dir = data_dir / "val"
@@ -307,7 +294,7 @@ def train_model(
             sample for i, sample in enumerate(full_dataset.samples) if i in test_indices
         ]
 
-    print(f"\nDataset sizes:")
+    print("\nDataset sizes:")
     print(f"  Train: {len(train_dataset)} samples")
     print(f"  Val: {len(val_dataset)} samples")
     print(f"  Test: {len(test_dataset)} samples")
@@ -386,7 +373,8 @@ def train_model(
             try:
                 health_url = mlflow_tracking_uri.rstrip("/") + "/health"
                 response = requests.get(health_url, timeout=3)
-                if response.status_code != 200:
+                http_ok = 200
+                if response.status_code != http_ok:
                     raise ConnectionError(f"MLflow server returned status {response.status_code}")
             except (requests.exceptions.RequestException, ConnectionError) as e:
                 print(f"MLflow server not reachable ({e}), continuing without MLflow logging")
@@ -446,7 +434,10 @@ def train_model(
                     print(f"Set active experiment: {experiment_name}")
 
                 except Exception as e:
-                    print(f"Failed to setup MLflow experiment ({e}), continuing without MLflow logging")
+                    print(
+                        f"Failed to setup MLflow experiment ({e}), "
+                        "continuing without MLflow logging"
+                    )
                     traceback.print_exc()
                     mlflow_logger = None
                 else:
@@ -459,7 +450,10 @@ def train_model(
                         loggers.append(mlflow_logger)
                         print(f"MLflow logging enabled for run: {run_name}")
                     except Exception as e:
-                        print(f"MLflow logger creation failed ({e}), continuing without MLflow logging")
+                        print(
+                            f"MLflow logger creation failed ({e}), "
+                            "continuing without MLflow logging"
+                        )
                         traceback.print_exc()
                         mlflow_logger = None
         else:
@@ -482,7 +476,7 @@ def train_model(
         print(f"MLflow logger initialization failed ({e}), continuing without MLflow logging")
         mlflow_logger = None
 
-    if mlflow_logger is not None and hasattr(mlflow_logger, 'run_id') and mlflow_logger.run_id:
+    if mlflow_logger is not None and hasattr(mlflow_logger, "run_id") and mlflow_logger.run_id:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -536,7 +530,7 @@ def train_model(
         gradient_clip_val=1.0,
     )
 
-    print(f"\nDataLoader info:")
+    print("\nDataLoader info:")
     print(f"  Train batches: {len(train_loader)}")
     print(f"  Val batches: {len(val_loader)}")
     print(f"  Test batches: {len(test_loader)}")
@@ -544,33 +538,30 @@ def train_model(
     print(f"  Gradient accumulation: {accumulate_grad_batches}")
     print(f"  Effective batch size (with accumulation): {batch_size * accumulate_grad_batches}")
 
-    if len(train_loader) < 5:
+    min_batches_warning = 5
+    if len(train_loader) < min_batches_warning:
         print(f"\nWARNING: Training dataset is very small ({len(train_loader)} batches).")
         print("This may cause training to complete very quickly.")
     if len(val_loader) == 0:
         raise ValueError("Validation dataloader is empty! Cannot train without validation data.")
 
     print(f"\nStarting training for {num_epochs} epochs...")
-    print(
-        f"Expected training time: "
-        f"~{len(train_loader) * num_epochs / 60:.1f} minutes (rough estimate)"
-    )
+    est_time = len(train_loader) * num_epochs / 60
+    print(f"Expected training time: ~{est_time:.1f} minutes (rough estimate)")
     try:
         trainer.fit(model, train_loader, val_loader)
         actual_epochs = trainer.current_epoch + 1
         print(f"\n✓ Training completed successfully after {actual_epochs} epochs!")
         print(
-            f"Trainer state: current_epoch={trainer.current_epoch}, "
-            f"max_epochs={trainer.max_epochs}"
+            f"Trainer state: current_epoch={trainer.current_epoch}, max_epochs={trainer.max_epochs}"
         )
         if actual_epochs < num_epochs:
             print(
-                f"⚠ WARNING: Training stopped after {actual_epochs} epochs "
-                f"instead of {num_epochs}!"
+                f"⚠ WARNING: Training stopped after {actual_epochs} epochs instead of {num_epochs}!"
             )
             print("This may indicate an issue. Check logs above for errors.")
     except KeyboardInterrupt:
-        print(f"\n⚠ Training interrupted by user")
+        print("\n⚠ Training interrupted by user")
         raise
     except Exception as e:
         print(f"\n✗ ERROR: Training failed with exception: {e}")
@@ -582,7 +573,7 @@ def train_model(
             f"max_epochs={trainer.max_epochs}"
         )
 
-    print(f"\nRunning test evaluation...")
+    print("\nRunning test evaluation...")
     print(f"Training completed {trainer.current_epoch + 1} out of {num_epochs} epochs")
     print("\n" + "=" * 50)
     print("Running evaluation on test set...")
@@ -602,7 +593,7 @@ def train_model(
             if isinstance(value, (int, float)):
                 print(f"  {key}: {value:.4f}")
 
-    print(f"\nLogging metrics to MLflow...")
+    print("\nLogging metrics to MLflow...")
     if mlflow_logger is not None:
         print(f"MLflow logger available, run_id: {mlflow_logger.run_id}")
         try:
@@ -630,10 +621,8 @@ def train_model(
     else:
         print("MLflow logger not available, skipping MLflow logging")
 
-    print(f"\n✓ Training function completed successfully.")
+    print("\n✓ Training function completed successfully.")
     print(f"  - Training epochs: {trainer.current_epoch + 1}/{num_epochs}")
     print(f"  - Test evaluation: {'Completed' if test_results else 'Skipped/Failed'}")
     print(f"  - MLflow logging: {'Completed' if mlflow_logger else 'Not available'}")
     return trainer, model
-
-

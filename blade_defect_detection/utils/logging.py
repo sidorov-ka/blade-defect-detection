@@ -1,6 +1,6 @@
 """MLflow logging utilities."""
 
-from typing import Any, Dict
+from typing import Any
 
 import mlflow
 
@@ -8,7 +8,7 @@ import mlflow
 def log_metrics_to_mlflow(
     experiment: Any,
     run_id: str,
-    metrics: Dict[str, Any],
+    metrics: dict[str, Any],
 ) -> None:
     """Log metrics to MLflow.
 
@@ -27,4 +27,3 @@ def log_metrics_to_mlflow(
 
         if test_metrics_count > 0:
             print(f"Logged {test_metrics_count} test metric(s) to MLflow")
-

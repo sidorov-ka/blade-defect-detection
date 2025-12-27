@@ -1,7 +1,7 @@
 """Dataset class for blade defect detection."""
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import torch
@@ -11,17 +11,12 @@ from torchvision import transforms
 
 
 class BladeDefectDataset(Dataset):
-    """Dataset for blade defect segmentation.
-
-    Loads images and masks from organized directories:
-    - data/images/{class}/ - images
-    - data/masks/{class}/ - masks (only for defect classes)
-    """
+    """Dataset for blade defect segmentation."""
 
     def __init__(
         self,
         data_dir: Path,
-        image_size: Tuple[int, int] = (256, 256),
+        image_size: tuple[int, int] = (256, 256),
         defect_classes: Optional[list] = None,
         transform: Optional[transforms.Compose] = None,
     ):
@@ -71,8 +66,8 @@ class BladeDefectDataset(Dataset):
                             "image_path": image_path,
                             "mask_path": mask_path,
                             "class_idx": self.class_to_idx[defect_class],
-                    }
-                )
+                        }
+                    )
 
         normal_dir = images_dir / "normal"
         if normal_dir.exists():
@@ -96,14 +91,8 @@ class BladeDefectDataset(Dataset):
         """Return dataset size."""
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get image and mask pair.
-
-        Returns:
-            Tuple of (image_tensor, mask_tensor)
-            - image_tensor: [3, H, W] float32 in [0, 1]
-            - mask_tensor: [H, W] int64 with class indices [0, 1, 2, 3, 4]
-        """
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Get image and mask pair."""
         sample = self.samples[idx]
 
         image = Image.open(sample["image_path"]).convert("RGB")
@@ -113,11 +102,8 @@ class BladeDefectDataset(Dataset):
             mask = Image.open(sample["mask_path"]).convert("L")
             mask = mask.resize(self.image_size, Image.NEAREST)
             mask_array = np.array(mask, dtype=np.uint8)
-
-            if mask_array.max() <= 1:
-                mask_array = np.where(mask_array > 0.5, sample["class_idx"], 0)
-            else:
-                mask_array = np.where(mask_array > 127, sample["class_idx"], 0)
+            threshold = 0.5 if mask_array.max() <= 1 else 127
+            mask_array = np.where(mask_array > threshold, sample["class_idx"], 0)
 
             mask_array = mask_array.astype(np.int64)
 
@@ -136,4 +122,3 @@ class BladeDefectDataset(Dataset):
             image_tensor = self.transform(image_tensor)
 
         return image_tensor, mask_tensor
-
