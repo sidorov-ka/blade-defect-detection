@@ -51,7 +51,7 @@ def _pull_dvc_data(data_path: Path) -> None:
                     print(f"\nRetry attempt {attempt}/{max_retries}...")
 
                 process = Popen(
-                    ["uv", "run", "dvc", "pull", str(data_path)],
+                    ["uv", "run", "dvc", "pull", "--force", str(data_path)],
                     stdout=PIPE,
                     stderr=PIPE,
                     text=True,
