@@ -44,41 +44,56 @@ def _pull_dvc_data(data_path: Path) -> None:
         return
 
     print(f"Pulling data from DVC to {data_path}...")
-    try:
-        process = Popen(
-            ["uv", "run", "dvc", "pull", str(data_path)],
-            stdout=PIPE,
-            stderr=PIPE,
-            text=True,
-            bufsize=1,
-        )
-
-        print("Downloading data (this may take several minutes for large datasets)...")
-        print("Progress: ", end="", flush=True)
-
-        def show_progress():
-            """Show animated progress dots."""
-            dots = ["", ".", "..", "..."]
-            i = 0
-            while process.poll() is None:
-                print(f"\rProgress: {dots[i % len(dots)]}", end="", flush=True)
-                i += 1
-                time.sleep(0.5)
-
-        progress_thread = threading.Thread(target=show_progress, daemon=True)
-        progress_thread.start()
-
-        stdout, stderr = process.communicate()
-
-        print("\r" + " " * 20 + "\r", end="")
-
-        if process.returncode == 0:
-            print("✓ Data pulled successfully from DVC")
-        else:
-            error_msg = stderr if stderr else stdout
-            raise subprocess.CalledProcessError(
-                process.returncode, "dvc pull", stderr=error_msg
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            if attempt > 1:
+                print(f"\nRetry attempt {attempt}/{max_retries}...")
+            
+            process = Popen(
+                ["uv", "run", "dvc", "pull", str(data_path)],
+                stdout=PIPE,
+                stderr=PIPE,
+                text=True,
+                bufsize=1,
             )
+
+            if attempt == 1:
+                print("Downloading data (this may take several minutes for large datasets)...")
+            print("Progress: ", end="", flush=True)
+
+            def show_progress():
+                """Show animated progress dots."""
+                dots = ["", ".", "..", "..."]
+                i = 0
+                while process.poll() is None:
+                    print(f"\rProgress: {dots[i % len(dots)]}", end="", flush=True)
+                    i += 1
+                    time.sleep(0.5)
+
+            progress_thread = threading.Thread(target=show_progress, daemon=True)
+            progress_thread.start()
+
+            stdout, stderr = process.communicate()
+
+            print("\r" + " " * 20 + "\r", end="")
+
+            if process.returncode == 0:
+                print("✓ Data pulled successfully from DVC")
+                return
+            else:
+                error_msg = stderr if stderr else stdout
+                if attempt < max_retries:
+                    print(f"\n⚠ Attempt {attempt} failed, retrying...")
+                    time.sleep(2)
+                    continue
+                raise subprocess.CalledProcessError(
+                    process.returncode, "dvc pull", stderr=error_msg
+                )
+        except subprocess.CalledProcessError as e:
+            if attempt < max_retries:
+                continue
+            raise
 
     except subprocess.CalledProcessError as e:
         print(f"\n⚠ Warning: Failed to pull data from DVC: {e.stderr if hasattr(e, 'stderr') else str(e)}")

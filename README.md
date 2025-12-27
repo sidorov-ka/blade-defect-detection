@@ -137,23 +137,17 @@ uv run pre-commit run -a
 
 ### Environment Configuration
 
-1. **Create `.env` file** (copy from `env.example`):
-```bash
-cp env.example .env
-```
+Environment variables are optional. You can set them if needed:
 
-2. **Configure environment variables** (optional) in `.env`:
-```env
+```bash
 # MLflow Configuration (optional)
-# MLflow server should be running on this URI for experiment tracking
-MLFLOW_TRACKING_URI=http://127.0.0.1:8080
+export MLFLOW_TRACKING_URI=http://127.0.0.1:8080
 
 # Data Directory (optional, defaults to 'data')
-DATA_DIR=data
+export DATA_DIR=data
 ```
 
 **Note**: 
-- `.env` is already in `.gitignore`
 - DVC uses public bucket access, no credentials needed for pulling data
 
 ### DVC Setup
