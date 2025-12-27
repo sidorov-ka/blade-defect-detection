@@ -1,0 +1,4 @@
+# Ignore README files from DVC
+README.md
+data/README.md
+
